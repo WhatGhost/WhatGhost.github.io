@@ -152,6 +152,786 @@
           <div id="js-content" class="content-ll">
             
   
+    <article id="post-cuda-c-best-practice-8" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2023/05/04/cuda-c-best-practice-8/">cuda_c_best_practice_8</a>
+    </h1>
+  
+
+        
+        <a href="/2023/05/04/cuda-c-best-practice-8/" class="archive-article-date">
+  	<time datetime="2023-05-04T03:26:08.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2023-05-04</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <h1 id="cuda-c-best-practice-笔记翻译-第三8章"><a class="markdownIt-Anchor" href="#cuda-c-best-practice-笔记翻译-第三8章"></a> # CUDA C BEST PRACTICE 笔记翻译 第三8章</h1>
+<p>中间的几章都是一些开发的一些基础，个人感觉用处不大，后面有时间再说，先搞一些我自己感兴趣的</p>
+<h1 id="8性能指标"><a class="markdownIt-Anchor" href="#8性能指标"></a> 8.性能指标</h1>
+<p>当尝试优化CUDA代码时，了解如何准确地测量性能并理解带宽在性能测量中所起的作用是重要的。本章讨论了如何正确的用 CPU 计时器和 CUDA 时间度量性能,以及探讨贷款如何影响只能指标以及如何应对这些挑战。</p>
+<h2 id="81-时间"><a class="markdownIt-Anchor" href="#81-时间"></a> 8.1 时间</h2>
+<p>CUDA 调用和核函数运行可以使用 CPU 和 GPU 计时器进行计时。本节将讨论这两种方法的功能、优点和缺陷。</p>
+<h3 id="811-使用cpu-计时器"><a class="markdownIt-Anchor" href="#811-使用cpu-计时器"></a> 8.1.1 使用CPU 计时器</h3>
+<p>任何 CPU 计时器都可以被用来测量 CUDA 调用和核函数的耗时。不同 CPU 计时器的细节不在本文的讨论范围之内。但是开发者需要了解所使用的计时器能提供的功能。</p>
+<p>当使用 CPU 计时器时，记住许多 CUDA API函数都是异步的是十分重要的。也就是说，这些函数会在执行完自己的任务之前将控制权返回调用的 CPU 线程。所有的核函数启动都是异步的，有 Async 后缀的内存拷贝函数也是异步的。因此，为了准确的度量一系列 cuda 调用的时间，在开始和结束计时器之前调用<code>cudaDeviceSynchronize()</code>函数来同步 CPU 和 GPU 线程是十分重要的。<code>cudaDeviceSynchronize()</code>函数会阻塞 CPU 线程直到之前的 CUDA 调用都完成。</p>
+<p>尽管可以同步 CPU 线程和 GPU 上的一个特定流(stream)或事件(event),但是这些同步函数并不适用与除了默认流以外的流上的计时代码。<code>cudaStreamSynchronize()</code>会阻塞 CPU 线程直到给定流中之前的 CUDA 调用执行完毕。<code>cudaEventSynchronize()</code>会阻塞CPU 线程直到特定流中给定的事件执行完成。由于驱动会交替执行其他非默认流中的CUDA 调用，其他流中的调用可能会被包含在计时中。</p>
+<p>由于默认流(stream 0)会串行的展示设备上的工作（默认流上的任务只有等其他流上的正在处理的任务完成后才能开始，其他流上的任务只有等默认流上的任务完成后才能执行）。所以在默认流上的计时是可靠的。</p>
+<p>本章节提到的CPU-GPU 之间的同步的函数会导致 GPU 执行流水线的停顿，所以使用起来需要谨慎以最小化性能影响。</p>
+<blockquote>
+<blockquote>
+<p>注：简单说某个流内的操作是顺序的，非默认流之间是异步的，默认流有阻塞作用。也就是说如果默认流上有任务，其他流都必须等默认流执行完成才能继续执行，默认流上也会等其他流执行完成再执行，也就是有排他性。非默认流之间是可以同时执行的，无法保证执行的先后顺序。</p>
+</blockquote>
+</blockquote>
+<p>8.1.2 使用 GPU 计时器</p>
+<blockquote>
+<blockquote>
+<p>注：事件是 cuda 的一个常见概念，下文的事件等价于 event，后面可能会 event 和事件混用，在这里说明，避免给读者造成困扰。</p>
+</blockquote>
+</blockquote>
+<p>CUDA 事件API 提供了函数用来创建和销毁event,记录 event(包含时间戳),将时间戳之间的差值转换为以毫秒为单位的浮点数（就是帮你做个差算耗时）。</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line">cudaEvent_t start, stop;</span><br><span class="line"><span class="type">float</span> time;</span><br><span class="line"></span><br><span class="line"><span class="built_in">cudaEventCreate</span>(&amp;start);</span><br><span class="line"><span class="built_in">cudaEventCreate</span>(&amp;stop);</span><br><span class="line"></span><br><span class="line"><span class="built_in">cudaEventRecord</span>( start, <span class="number">0</span> );</span><br><span class="line">kernel&lt;&lt;&lt;grid,threads&gt;&gt;&gt; ( d_odata, d_idata, size_x, size_y,</span><br><span class="line">                           NUM_REPS);</span><br><span class="line"><span class="built_in">cudaEventRecord</span>( stop, <span class="number">0</span> );</span><br><span class="line"><span class="built_in">cudaEventSynchronize</span>( stop );</span><br><span class="line"></span><br><span class="line"><span class="built_in">cudaEventElapsedTime</span>( &amp;time, start, stop );</span><br><span class="line"><span class="built_in">cudaEventDestroy</span>( start );</span><br><span class="line"><span class="built_in">cudaEventDestroy</span>( stop );</span><br></pre></td></tr></table></figure>
+<p>这里 <code>cudaEventRecord()</code>用来将 start 和 end 事件放置在默认流中。当流执行到这个事件时，会记录下这个事件的时间戳。<code>cudaEventElapsedTime()</code>函数返回 start 和 end 这两个 event 之间的时间间隔。单位是 ms，分辨率约为半毫秒。类似于其他表中函数调用，这些操作、参数和返回值都可以在CUDA Toolkit Reference Manual中找到介绍。需要注意的是这个时间是用 GPU 时钟度量的，所以这个时间测量是操作系统无关的。</p>
+<h2 id="82-带宽bandwidth"><a class="markdownIt-Anchor" href="#82-带宽bandwidth"></a> 8.2 带宽(Bandwidth)</h2>
+<p>带宽——数据的传输速率，是影响性能的最重要的因素之一。几乎所有对代码的改动都需要考虑他们对带宽的影响。带宽会受到数据存储的内存选择，数据的排布、数据访问的顺序和其他因素剧烈的影响。</p>
+<p>为了准确地测量性能，需要计算出理论带宽和有效带宽。当后者明显小于前者，说明设计和实现的细节可能会降低带宽，所以增加带宽应该是后续优化的主要目标。</p>
+<h3 id="821-理论带宽计算"><a class="markdownIt-Anchor" href="#821-理论带宽计算"></a> 8.2.1 理论带宽计算</h3>
+<p>理论带宽可以用产品手册提供的硬件参数来计算。例如，NVIDIA Tesla V100 使用HBM2 RAM ，内存时钟频率为877 MHz以及4096位宽的内存接口。</p>
+<p>使用这些数据，V100的理论内存带宽峰值是 898GB/s</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mo stretchy="false">(</mo><mn>0.877</mn><mo>×</mo><mn>1</mn><msup><mn>0</mn><mn>9</mn></msup><mo>×</mo><mo stretchy="false">(</mo><mn>4096</mn><mi mathvariant="normal">/</mi><mn>8</mn><mo stretchy="false">)</mo><mo>×</mo><mn>2</mn><mo stretchy="false">)</mo><mo>÷</mo><mn>1</mn><msup><mn>0</mn><mn>9</mn></msup><mo>=</mo><mn>898</mn><mi>G</mi><mi>B</mi><mi mathvariant="normal">/</mi><mi>s</mi></mrow><annotation encoding="application/x-tex">(0.877 \times 10^9 \times (4096/8) \times 2) \div 10^9 = 898 GB/s
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord">0</span><span class="mord">.</span><span class="mord">8</span><span class="mord">7</span><span class="mord">7</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.9474379999999999em;vertical-align:-0.08333em;"></span><span class="mord">1</span><span class="mord"><span class="mord">0</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">9</span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord">4</span><span class="mord">0</span><span class="mord">9</span><span class="mord">6</span><span class="mord">/</span><span class="mord">8</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">2</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">÷</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.8641079999999999em;vertical-align:0em;"></span><span class="mord">1</span><span class="mord"><span class="mord">0</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">9</span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">8</span><span class="mord">9</span><span class="mord">8</span><span class="mord mathdefault">G</span><span class="mord mathdefault" style="margin-right:0.05017em;">B</span><span class="mord">/</span><span class="mord mathdefault">s</span></span></span></span></span></p>
+<p>在计算中，内存时钟频率被转换成 Hz，乘以位宽(除以8转换为字节)，乘以2是由于 HBM2的双倍数据速率，最后结果除以<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mn>1</mn><msup><mn>0</mn><mn>9</mn></msup></mrow><annotation encoding="application/x-tex">10^9</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141079999999999em;vertical-align:0em;"></span><span class="mord">1</span><span class="mord"><span class="mord">0</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">9</span></span></span></span></span></span></span></span></span></span></span>转换为 GB/s。</p>
+<blockquote>
+<blockquote>
+<blockquote>
+<p>Note:<br>
+在开启了 ECC 的 GDDR 内存的 GPU 上，可用的 DRAM 会减少6.25%以提供 ECC bits的存储空间。每个内存事务中获取 ECC bits 相比于关闭 ECC 的 GPU 来说也会减少约20%的有效的有效内存带宽。ECC 对内存带宽的影响取决于内存访问模式且可能会更高。另一方面，HBM2内存会提供额外的 ECC 资源，并且允许无额外开销的 ECC 保护。</p>
+</blockquote>
+</blockquote>
+</blockquote>
+<h3 id="822-有效带宽计算"><a class="markdownIt-Anchor" href="#822-有效带宽计算"></a> 8.2.2 有效带宽计算</h3>
+<p>有效带宽通过对特定程序计时以及了解多少数据被该程序访问来计算的。公式为</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>b</mi><mi>a</mi><mi>n</mi><mi>d</mi><mi>w</mi><mi>i</mi><mi>d</mi><mi>t</mi><mi>h</mi><mo>=</mo><mo stretchy="false">(</mo><mo stretchy="false">(</mo><msub><mi>B</mi><mi>r</mi></msub><mo>+</mo><msub><mi>B</mi><mi>w</mi></msub><mo stretchy="false">)</mo><mo>÷</mo><mn>1</mn><msup><mn>0</mn><mn>9</mn></msup><mo stretchy="false">)</mo><mo>÷</mo><mi>t</mi><mi>i</mi><mi>m</mi><mi>e</mi></mrow><annotation encoding="application/x-tex">bandwidth=((B_r+B_w)\div 10^9 )\div time
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault">b</span><span class="mord mathdefault">a</span><span class="mord mathdefault">n</span><span class="mord mathdefault">d</span><span class="mord mathdefault" style="margin-right:0.02691em;">w</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mord mathdefault">t</span><span class="mord mathdefault">h</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault" style="margin-right:0.05017em;">B</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.151392em;"><span style="top:-2.5500000000000003em;margin-left:-0.05017em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.05017em;">B</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.151392em;"><span style="top:-2.5500000000000003em;margin-left:-0.05017em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight" style="margin-right:0.02691em;">w</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">÷</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1.1141079999999999em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mord"><span class="mord">0</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">9</span></span></span></span></span></span></span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">÷</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.65952em;vertical-align:0em;"></span><span class="mord mathdefault">t</span><span class="mord mathdefault">i</span><span class="mord mathdefault">m</span><span class="mord mathdefault">e</span></span></span></span></span></p>
+<p>这里的有效带宽单位是 GB/s <span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>B</mi><mi>r</mi></msub></mrow><annotation encoding="application/x-tex">B_r</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.05017em;">B</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.151392em;"><span style="top:-2.5500000000000003em;margin-left:-0.05017em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight" style="margin-right:0.02778em;">r</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>是单个 kernel 读取的字节数，<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msub><mi>B</mi><mi>w</mi></msub></mrow><annotation encoding="application/x-tex">B_w</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.83333em;vertical-align:-0.15em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.05017em;">B</span><span class="msupsub"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.151392em;"><span style="top:-2.5500000000000003em;margin-left:-0.05017em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight" style="margin-right:0.02691em;">w</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.15em;"><span></span></span></span></span></span></span></span></span></span>是单个 kernel 写入的字节数，time 的单位是 s。</p>
+<p>举例来说，为了计算 2048*2048 矩阵拷贝的有效带宽，可以用下列公式</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>b</mi><mi>a</mi><mi>n</mi><mi>d</mi><mi>w</mi><mi>i</mi><mi>d</mi><mi>t</mi><mi>h</mi><mo>=</mo><mo stretchy="false">(</mo><mo stretchy="false">(</mo><mn>204</mn><msup><mn>8</mn><mn>2</mn></msup><mo>×</mo><mn>4</mn><mo>×</mo><mn>2</mn><mo stretchy="false">)</mo><mo>÷</mo><mn>1</mn><msup><mn>0</mn><mn>9</mn></msup><mo stretchy="false">)</mo><mo>÷</mo><mi>t</mi><mi>i</mi><mi>m</mi><mi>e</mi></mrow><annotation encoding="application/x-tex">bandwidth=((2048^2 \times 4 \times 2)\div 10^9 )\div time
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault">b</span><span class="mord mathdefault">a</span><span class="mord mathdefault">n</span><span class="mord mathdefault">d</span><span class="mord mathdefault" style="margin-right:0.02691em;">w</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mord mathdefault">t</span><span class="mord mathdefault">h</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1.1141079999999999em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mopen">(</span><span class="mord">2</span><span class="mord">0</span><span class="mord">4</span><span class="mord"><span class="mord">8</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.72777em;vertical-align:-0.08333em;"></span><span class="mord">4</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">×</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">2</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">÷</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1.1141079999999999em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mord"><span class="mord">0</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">9</span></span></span></span></span></span></span></span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">÷</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.65952em;vertical-align:0em;"></span><span class="mord mathdefault">t</span><span class="mord mathdefault">i</span><span class="mord mathdefault">m</span><span class="mord mathdefault">e</span></span></span></span></span></p>
+<p>元素数目乘以每个元素的字节数（float 是四字节）再乘2（由于既有读取又有写入），再除<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mn>1</mn><msup><mn>0</mn><mn>9</mn></msup></mrow><annotation encoding="application/x-tex">10^9</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141079999999999em;vertical-align:0em;"></span><span class="mord">1</span><span class="mord"><span class="mord">0</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">9</span></span></span></span></span></span></span></span></span></span></span>将单位转换为 GB，再除以以秒为单位的时间得到 GB/s。</p>
+<h3 id="823-由可视化-profiler-报告的-吞吐量"><a class="markdownIt-Anchor" href="#823-由可视化-profiler-报告的-吞吐量"></a> 8.2.3 由可视化 Profiler 报告的 吞吐量。</h3>
+<p>对于计算能力大于等于2.0的设备来说，可视化 Profiler 可以用来收集一些不同的内存吞吐指标。下列的吞吐指标可以在Details 或者 Detail Graphs 视图下展示</p>
+<blockquote>
+<blockquote>
+<p>注：这里的吞吐量和上文说的带宽可以理解为都是对内存的单位时间内处理的元素的大小的一个度量，可以理解为同一种类型的指标。</p>
+</blockquote>
+</blockquote>
+<ul>
+<li>
+<p>Requested Global Load Throughput</p>
+</li>
+<li></li>
+<li>
+<p>Requested Global Store Throughput</p>
+</li>
+<li>
+<p>Global Load Throughput</p>
+</li>
+<li>
+<p>Global Store Throughput</p>
+</li>
+<li>
+<p>DRAM Read Throughput</p>
+</li>
+<li>
+<p>DRAM Write Throughput</p>
+</li>
+</ul>
+<p>Requested Global Load Throughput和Requested Global Store Throughput这两个值只带了核函数请求全局内存的吞吐，是通过有效带宽计算得到的。</p>
+<p>由于最小的内存事务大小比大多数的字大小要大，实际的核函数请求的内存吞吐可能包含一些不是核函数需要的数据的传输。对于全局内存访问，实际的吞吐通过Global Load Throughput和Global Store Throughput这两个值反应。</p>
+<p>需要注意的是，两个只都是有用的，实际的内存吞吐反应了代码与硬件的极限的接近程度。将有效带宽或请求带宽与实际带宽进行比较，可以很好地估计由于内存的次优的合并访存而浪费了多少带宽。对于全局内存访问,请求内存带宽与实际内存带宽的比较通过Global Memory Load Efficiency和 Global Memory Store Efficiency 这两个指标反映。</p>
+
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2023/05/04/cuda-c-best-practice-8/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-cuda-c-best-practice-3" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2023/05/04/cuda-c-best-practice-3/">cuda_c_best_practice_3</a>
+    </h1>
+  
+
+        
+        <a href="/2023/05/04/cuda-c-best-practice-3/" class="archive-article-date">
+  	<time datetime="2023-05-04T03:26:04.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2023-05-04</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <h1 id="cuda-c-best-practice-笔记翻译-第三章"><a class="markdownIt-Anchor" href="#cuda-c-best-practice-笔记翻译-第三章"></a> # CUDA C BEST PRACTICE 笔记翻译 第三章</h1>
+<p>这次来第三章</p>
+<h1 id="3-application-profiling"><a class="markdownIt-Anchor" href="#3-application-profiling"></a> 3. Application Profiling</h1>
+<blockquote>
+<blockquote>
+<p>注 Profile这个词不太好翻译，我平常的理解一般是代指对程序进行各个方面的分析以找到瓶颈或者问题，后面我就都用 profile 了</p>
+</blockquote>
+</blockquote>
+<h2 id="31-profile"><a class="markdownIt-Anchor" href="#31-profile"></a> 3.1 Profile</h2>
+<p>许多代码用较少代码完成了大量的工作，使用 profiler,开发者可以定位到这样的热点，并开始编译并行化的候选列表</p>
+<blockquote>
+<blockquote>
+<p>较少的代码完成大量工作，这里说的很模糊，我理解的意思是用少量的函数完成了大部分的计算，那么这块就有并行化加速的潜力。并行化候选列表我理解的就是看看哪些耗时多，这些就可以尝试用并行化来加速。</p>
+</blockquote>
+</blockquote>
+<h3 id="311-创建-profile"><a class="markdownIt-Anchor" href="#311-创建-profile"></a> 3.1.1 创建 Profile</h3>
+<p>有许多可能的方法来分析代码，但是目标都是相同的:找到花费了大部分程序运行时间一个或一系列函数。</p>
+<p>对于任何分析活动，最重要的考虑是确保工作负载是真实的,换句话说，从这些分析测试中获得的结论和基于此做的决策与数据是相关的。使用非真实的数据会导致非最优的结果，开发人员会浪费精力在对非真实的数据规模上进行优化以及聚焦在错误的热点函数上。</p>
+<p>有许多工具可以进行 profile 的操作，比如gprof,这是一个开源的 linux 平台的GNU内置的分析工具,下面是使用的一个例子</p>
+
+<!-- ![](./cuda-c-best-practice-3/1.png) -->
+<h3 id="312-识别热点"><a class="markdownIt-Anchor" href="#312-识别热点"></a> 3.1.2. 识别热点</h3>
+<p>在上面的例子中，我们可以清晰的看到<code>genTimeStep()</code>这个函数占了三分之一的程序运行时间,这个函数就是我们进行并行化的第一个候选。</p>
+<p>值得注意的是，上述例子的部分其他函数也占用了总运行时间的很大一部分，如<code>CalcStats()</code>和<code>CalcSummaryData()</code>。将这些函数并行化也会提升我们的加速的可能性。</p>
+<h3 id="313-理解可扩展行scaling"><a class="markdownIt-Anchor" href="#313-理解可扩展行scaling"></a> 3.1.3 理解可扩展行（scaling）</h3>
+<blockquote>
+<blockquote>
+<p>注：这里的 scaling 同样不是很好翻译，其大概的意思是整个工作的加速效果会随着不同的处理器和计算规模的增加情况如何变化，后面都用可扩展性</p>
+</blockquote>
+</blockquote>
+<p>通过了解程序如何扩展，我们可以设定预期并计划增量的并行策略，3.1.3.1介绍了强可扩展性,使得我们在固定问题规模的情况下得到加速的上界。3.1.3.2介绍了弱可扩展性,问题规模是增加的。在许多程序中,是强和弱可扩展性 的结合。</p>
+<h4 id="3131-强可扩展性与amdahl-定律"><a class="markdownIt-Anchor" href="#3131-强可扩展性与amdahl-定律"></a> 3.1.3.1 强可扩展性与Amdahl 定律</h4>
+<p>强可伸缩性是一种度量，用于衡量对于固定的总体问题大小，随着向系统中添加更多处理器，解决问题所需的时间如何减少。表现出线性强扩展的应用程序的加速与所使用的处理器数量相等。</p>
+<p>强可扩展性等价于阿姆达尔(Amdahl)定律,指出了对于某个程序的并行部分所能得到的最大加速，程序的最大加速<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>S</mi></mrow><annotation encoding="application/x-tex">S</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.05764em;">S</span></span></span></span>为</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>S</mi><mo>=</mo><mfrac><mn>1</mn><mrow><mn>1</mn><mo>−</mo><mi>P</mi><mo>+</mo><mfrac><mi>P</mi><mi>N</mi></mfrac></mrow></mfrac></mrow><annotation encoding="application/x-tex">S=\frac{1}{1-P+\frac{P}{N}} 
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.05764em;">S</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:2.428771em;vertical-align:-1.1073309999999998em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:1.32144em;"><span style="top:-2.2376690000000004em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">1</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">P</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mord"><span class="mopen nulldelimiter"></span><span class="mfrac"><span class="vlist-t vlist-t2"><span class="vlist-r"><span class="vlist" style="height:0.872331em;"><span style="top:-2.6550000000000002em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight" style="margin-right:0.10903em;">N</span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.394em;"><span class="pstrut" style="height:3em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight" style="margin-right:0.13889em;">P</span></span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:0.345em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span><span style="top:-3.23em;"><span class="pstrut" style="height:3em;"></span><span class="frac-line" style="border-bottom-width:0.04em;"></span></span><span style="top:-3.677em;"><span class="pstrut" style="height:3em;"></span><span class="mord"><span class="mord">1</span></span></span></span><span class="vlist-s">​</span></span><span class="vlist-r"><span class="vlist" style="height:1.1073309999999998em;"><span></span></span></span></span></span><span class="mclose nulldelimiter"></span></span></span></span></span></span></p>
+<p>这里 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>P</mi></mrow><annotation encoding="application/x-tex">P</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">P</span></span></span></span>是可并行化部分所花费的总时间占比， <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>N</mi></mrow><annotation encoding="application/x-tex">N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.10903em;">N</span></span></span></span>是并行执行的处理器数目。N 越大，<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>P</mi><mi mathvariant="normal">/</mi><mi>N</mi></mrow><annotation encoding="application/x-tex">P/N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">P</span><span class="mord">/</span><span class="mord mathdefault" style="margin-right:0.10903em;">N</span></span></span></span>就越小,所以当 N 足够大时，公式就变成了<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>S</mi><mo>=</mo><mn>1</mn><mi mathvariant="normal">/</mi><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>P</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">S=1/(1-P)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.05764em;">S</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mord">/</span><span class="mopen">(</span><span class="mord">1</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">P</span><span class="mclose">)</span></span></span></span>。所以如果一个程序可以并行的部分占比四分之三，最高的加速比就是4</p>
+<p>事实上，大部分程序虽然在某些程度下具有线性强扩展性，无法展示出完美的线性强扩展性。关键的一点是可并行的部分越多，加速的潜力就越大。相反的，如果P 较小，增加处理器的数目所带来的性能提升就很小。因此，为了在固定的问题规模下获得最大的加速，值得花精力增加P，也就是最大化可以并行化的代码量。</p>
+<blockquote>
+<blockquote>
+<p>注：阿姆达尔定律乍一看打击挺大的，我在刚接触这个研究方向是也困扰了一段时间，如果可并行部分就那么多，我就是用无限多个核心加速无线快也存在一个看起来并不高的上限。但是需要注意的是阿姆达尔的定律假定问题总体规模不变，事实上在很多情况下随着核心数目的增加问题规模也是会增加的。也可以看到很多时候加速比都成百上千的，换句话说，上限确实存在，但是在一定区间内还是会增大。可以尽量去增加问题的规模以打到更高的加速比。</p>
+</blockquote>
+</blockquote>
+<h4 id="3132-弱可扩展性与gustafson定律"><a class="markdownIt-Anchor" href="#3132-弱可扩展性与gustafson定律"></a> 3.1.3.2 弱可扩展性与Gustafson定律</h4>
+<p>弱缩放是一种度量方法，用于衡量随着更多处理器被添加到系统中，每个处理器的问题大小是固定的，解决问题的时间如何变化。例如，随着处理器数量的增加，整体问题的大小也会增加。弱可扩展性等价于古斯塔夫森(Gustafson)定律。问题的大小随处理器数量的增加而增加。因此，程序的最大加速S为</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>S</mi><mo>=</mo><mi>N</mi><mo>+</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>P</mi><mo stretchy="false">)</mo><mo stretchy="false">(</mo><mn>1</mn><mo>−</mo><mi>N</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">S=N+(1-P)(1-N)
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.05764em;">S</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.76666em;vertical-align:-0.08333em;"></span><span class="mord mathdefault" style="margin-right:0.10903em;">N</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord">1</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.13889em;">P</span><span class="mclose">)</span><span class="mopen">(</span><span class="mord">1</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10903em;">N</span><span class="mclose">)</span></span></span></span></span></p>
+<p>这里的 P 和 N 的概念与上面一致的</p>
+<p>另一种看待古斯塔夫森定律的角度是当我们扩展系统时，并不是问题的规模保持不变，而是执行的时间保持不变。请注意，Gustafson定律假设串行执行与并行执行的比率保持不变，这反映了设置和处理更大问题的额外成本。</p>
+<h4 id="3133-应用强扩展性与弱扩展性"><a class="markdownIt-Anchor" href="#3133-应用强扩展性与弱扩展性"></a> 3.1.3.3 应用强扩展性与弱扩展性</h4>
+<p>了解哪种扩展线适合于某个应用程序是评估加速的重要部分.对于某些应用程序，问题大小将保持不变，因此只适用于强扩展性。一个例子是模拟两个分子如何相互作用，其中分子大小是固定的。</p>
+<p>For other applications, the problem size will grow to fill the available processors<br>
+对于其他的应用程序，问题规模会增加以填充可用的处理器。比如流体建模或蒙特卡洛模拟,增加问题大小可以增加准确性(accuracy)</p>
+<blockquote>
+<blockquote>
+<p>注：没太明白跟准确性有啥关系，或者是我翻译的错了，希望有大佬可以解释下。</p>
+</blockquote>
+</blockquote>
+<p>在了解了应用的 profile 后，开发人员应该了解如果计算性能发生变化，问题大小将如何变化，然后应用Amdahl定律或Gustafson定律来确定加速的上限。</p>
+
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2023/05/04/cuda-c-best-practice-3/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-cuda-c-best-practice-2" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2023/05/04/cuda-c-best-practice-2/">cuda_c_best_practice_2</a>
+    </h1>
+  
+
+        
+        <a href="/2023/05/04/cuda-c-best-practice-2/" class="archive-article-date">
+  	<time datetime="2023-05-04T03:25:58.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2023-05-04</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <h1 id="cuda-c-best-practice-笔记翻译-第二章"><a class="markdownIt-Anchor" href="#cuda-c-best-practice-笔记翻译-第二章"></a> CUDA C BEST PRACTICE 笔记翻译 第二章</h1>
+<p>之前接触过一段时间的 cuda，但是自从工作之后就很少在碰 cuda 了，cuda 最近的发展可谓是日新月异，这次正准备阅读 cuda c best practice,趁此机会记录和翻译一下，也记录一下自己的见解（见解会用注解的形式标注）</p>
+<p>这里是英文原文，想看原文的可以点这个链接<br>
+<a target="_blank" rel="noopener" href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/">https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/</a></p>
+<p>第一章是序言，搞点客套话，就不翻译了，直接第二章开始</p>
+<h1 id="2异构计算"><a class="markdownIt-Anchor" href="#2异构计算"></a> 2.异构计算</h1>
+<p>CUDA 编程 涉及到在两种不同的平台上并行地执行代码：有着一个或多个 CPU 的主机端(host 端，下文统称 host 端)和有着一个或多个NVIDIA-GPU 的设备端（device 端，下文统称 device 端）</p>
+<blockquote>
+<blockquote>
+<p>注：由于在 cuda 里 host 和 device 是两个常用的概念，翻译成中文总觉得怪怪的，下文也都用 host 代指 CPU 端或者主机端，用 device 代表设备端或 GPU 端。</p>
+</blockquote>
+</blockquote>
+<p>虽然 NVIDIA 的 GPU 尝尝与图形相关，但是其也是可以并行运行上千轻量级线程的强大的算数引擎，这使得 GPU 可以非常好的适用在一些可以利用并行执行的场景中。</p>
+<p>然而，GPU 的设计与 host 端是截然不同的，所以了解他们之间的不同以及他们如何影响到CUDA程序的性能是十分重要的。</p>
+<h2 id="21-host-和-device-的区别"><a class="markdownIt-Anchor" href="#21-host-和-device-的区别"></a> 2.1 host 和 device 的区别</h2>
+<p>主要的区别在于线程模型 和 独立内存 。</p>
+<ul>
+<li><strong>线程资源</strong></li>
+</ul>
+<p>host 端只能支持有限数量的并发线程。比如,一个拥有两个32core 处理器的机子只能同时执行64线程（如果CPU 支持同时多线程则是64的较小的整数倍）。相比之下，CUDA 里最小的并行可执行单元就是32线程（一个 warp），现代的 GPU可以在单个多处理器(multiprocesser)上最多同时执行2048个线程,在有80个 多处理器的 GPU 上可以同时执行超过16W 的线程。</p>
+<ul>
+<li><strong>线程</strong></li>
+</ul>
+<p>CPU 的线程是重量级的，操作系统需要在 CPU 的执行环境中换进换出线程以提供多线程能力，线程的上下文切换是慢且开销大的。相比之下，GPU 的线程是轻量级的,在一个典型的 GPU 系统中，上千个线程(以 warp 的形式)排队等待执行。如果 GPU 需要等待一组 warp ,他可以继续执行其他 warp。由于活跃线程分配的寄存器是独立的，所以GPU的线程间切换不需要交换寄存器值和其他状态。这些资源会一直分配给每个线程直到它执行完毕。总而言之，CPU的核心被设计来最小化少量线程单次的延迟，GPU设计的目的就是用来同时并行执行大量轻量级线程以最大化吞吐</p>
+<blockquote>
+<blockquote>
+<p>注：研究生是上课学习时，导师也曾介绍过这个理论，CPU 设计侧重于延迟，而 GPU 侧重于吞吐，GPU 单核的频率也是远低于 CPU 的。</p>
+</blockquote>
+</blockquote>
+<ul>
+<li><strong>RAM</strong></li>
+</ul>
+<p>host端与 device 端有着各自独立的内存。正是由于内存相互独立,host 端的内存需要与 device 端的内存进行偶尔的通信。</p>
+<blockquote>
+<blockquote>
+<p>这里原文用了occasionally偶尔这个词，其意思我认为仅仅在于指出通信次数可以较少，对于一个常规的程序来说也就开始CPU-&gt;GPU，算完了再 GPU-&gt;CPU，内存拷贝是必须也省不掉的，及时是统一内存寻址也会有隐式的靠背（不过最近看 GTC 好像有个新技术可以不用内存拷贝，这块我就不是很了解了）</p>
+</blockquote>
+</blockquote>
+<p>这些是CPU主机和GPU设备在并行编程方面的主要硬件差异,还有一些其他差异，会在本文档的其他地方讨论。考虑到这些差异，这可以被视作一个异构系统，其中每个处理单元都被用来做最擅长的事:host 端做序列化的任务，device 做并行化的任务。</p>
+<h2 id="22-什么任务运行在-cuda-enabled-设备"><a class="markdownIt-Anchor" href="#22-什么任务运行在-cuda-enabled-设备"></a> 2.2 什么任务运行在 CUDA-Enabled 设备</h2>
+<p>在决定程序的哪一部分运行在device端时，需要考虑以下问题：</p>
+<ul>
+<li>device端 非常适合可以同时并行运行多个数据元素的计算。比较典型的就是大数据集的算数运算(比如矩阵),同样的操作可以在上千个元素间同时执行。使用 CUDA 获得良好性能的要求是：软件程序必须使用大量的并行线程。CUDA 的轻量级线程模型可以支持同时运行多个线程。</li>
+<li>为了使用 CUDA，数据必须从 host 传输到 device 端，这些传输是十分昂贵的，为了性能考虑必须最小化这些传输。这一传输成本会带来一下影响
+<ul>
+<li>计算的复杂性必须能证明它值得在host 和 device 端进行数据的传输。只传输数据用来给少量线程简单的使用只会带来少量甚至没有收益。理想的场景是许多线程执行大量的工作。</li>
+<li>例如，将两个矩阵传输到device以执行矩阵加法，然后将结果传输回主机将不会实现太多的性能优势。这里的问题是传输每个数据所执行的计算的数目。对于前面提到的运算,假设每个矩阵的大小是<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>N</mi><mo>∗</mo><mi>N</mi></mrow><annotation encoding="application/x-tex">N * N</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.10903em;">N</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">∗</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.10903em;">N</span></span></span></span>,计算量是<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>N</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">N^2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141079999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.10903em;">N</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span>而传输量是<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mn>3</mn><msup><mi>N</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">3N^2</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141079999999999em;vertical-align:0em;"></span><span class="mord">3</span><span class="mord"><span class="mord mathdefault" style="margin-right:0.10903em;">N</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span>，所以计算传输比是1:3或 O(1)。这个比值越大，越容易获得性能收益.举例来说，同样大小的矩阵乘法需要<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>N</mi><mn>3</mn></msup></mrow><annotation encoding="application/x-tex">N^3</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141079999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.10903em;">N</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">3</span></span></span></span></span></span></span></span></span></span></span>的计算量,所以计算传输比是 O(N),矩阵规模越大，收益也会越大。操作的类型也重要的考虑因素,加法的计算复杂度与三角函数计算是不同的。在确定操作是应该在host上执行还是在GPU上执行时，考虑向GPU传输数据和从GPU传输数据的开销是很重要的。</li>
+<li>数据应该尽可能长时间的保存在 device 端。因为需要尽可能的减少传输，在同一组数据上运行多个内核程序(kernel)应该倾向于把数据一致保存在 device 端，而不是将结果传回 host 端再传回来。所以，之前的矩阵加法的例子，如果这两个矩阵之前已经在 device 端，是前面某些计算的结果，或者是他们加完之后还要进行后续的计算,那这个矩阵加法就应该在 device 端计算。这个方法论即使一系列计算中的某一步在 host 端计算更快也是有用的，如果能减少一次或多次设备间的传输，即使稍微慢点的 kernel 也是有受益的.</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<blockquote>
+<p>注：这个比例是个很好的量化手段，之前考虑工作量大小只是定型评经验来进行考虑，计算传输比可以像复杂度一样定量描述,说白了就是我费了那么大劲传到 GPU 上，总得多干点计算，不然我传个鸡毛。尽可能保存更长的时间这块就有点废话了， 因为计算传输比肯定是要考虑在 gpu 上的全部计算。</p>
+</blockquote>
+</blockquote>
+<ul>
+<li>为了获得最佳性能，在GPU上运行的相邻线程访问内存时应该有一定的一致性 ,特定的内存访问模式使硬件能够将多个数据项的读或写组合并到一个操作中（也就是常说的合并访存）。数据如果不能合理的布局以合并访存，或者没有足够的局部性以利用 L1 cache和纹理缓存，会导致使用 GPU 时加速效果较小。有一个值得注意的例外是完全随机的内存访问。一般来说，应该避免出现这种情况，因为与峰值能力相比，任何架构处理这些内存访问模式的效率都很低。然而,与基于缓存的架构（如 CPU）相比，延迟隐藏架构（GPU）,应对完全随机的内存访问模式更好。</li>
+</ul>
+<blockquote>
+<blockquote>
+<p>注：完全随机内存访问这是个比较有趣的结论，按照以前的想法来说，GPU 应该尽可能全局内存访问，完全随机更是会严重影响性能，但是看文档的描述完全随机虽然性能差，但是 CPU 性能更差，这块可能需要更多的测试数据的支撑吧，或者有没有类似的加速工作论文应用到了这一点呢</p>
+</blockquote>
+</blockquote>
+
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2023/05/04/cuda-c-best-practice-2/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-scp-bg" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2023/05/04/scp-bg/">scp 后台传输</a>
+    </h1>
+  
+
+        
+        <a href="/2023/05/04/scp-bg/" class="archive-article-date">
+  	<time datetime="2023-05-04T03:16:02.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2023-05-04</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <h1 id="scp-后台传输"><a class="markdownIt-Anchor" href="#scp-后台传输"></a> scp 后台传输</h1>
+<p>scp 面对大文件时尝尝传输的很慢，前台传有时候terminal一崩了就得从头再来，很考验心态</p>
+<p>下面介绍下如何在后台进行scp</p>
+<p>首先发起scp</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">scp -r xxxxx:xxx xxxxx</span><br></pre></td></tr></table></figure>
+<p>之后按Crtl+z暂停,会提示 [1]+  Stopped   xxxxxxx</p>
+<p>之后输入</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">bg %1</span><br></pre></td></tr></table></figure>
+<p>把任务1移动到后台运行，虽然移动到后台了，但是关闭窗口还是会让任务停下，这里我们可以用disown指令忽略挂起信号</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">disown -h %1</span><br></pre></td></tr></table></figure>
+<p>之后就完事了，可以通过jobs指令查看当前任务</p>
+
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">日常</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/编程笔记//" class="article-tag-list-link color5">编程笔记</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2023/05/04/scp-bg/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-nvidia-docker-install" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2023/05/04/nvidia-docker-install/">docker &amp; nvidia-docker 安装</a>
+    </h1>
+  
+
+        
+        <a href="/2023/05/04/nvidia-docker-install/" class="archive-article-date">
+  	<time datetime="2023-05-04T03:11:27.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2023-05-04</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <h1 id="docker-nvidia-docker-安装"><a class="markdownIt-Anchor" href="#docker-nvidia-docker-安装"></a> docker &amp; nvidia-docker 安装</h1>
+<p>分3步</p>
+<ol>
+<li>安装 docker</li>
+<li>安装 nvidia-docker</li>
+<li>修改镜像存储位置</li>
+</ol>
+<h2 id="安装-docker"><a class="markdownIt-Anchor" href="#安装-docker"></a> 安装 docker</h2>
+<p>官方文档https://docs.docker.com/engine/install/centos/</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">#安装一些依赖</span></span><br><span class="line">yum install yum-utils</span><br><span class="line"><span class="comment">#添加 repo</span></span><br><span class="line">yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo</span><br></pre></td></tr></table></figure>
+<blockquote>
+<blockquote>
+<p>我在添加 repo 时运行yum-config-manager 报错 『No moudle named yum』。报错原因是 yum 使用的python 是 python2.7.5,而yum-config-manager使用的是2.7.2，修改为一致后解决问题</p>
+</blockquote>
+</blockquote>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">#安装 docker，如果之前有老版本的需要先卸载掉</span></span><br><span class="line">yum install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin</span><br><span class="line"></span><br><span class="line"><span class="comment">#启动 docker</span></span><br><span class="line">systemctl start docker</span><br></pre></td></tr></table></figure>
+<p>自此，docker 安装完成<br>
+可以用docker run hello-world 运行检查一下，但是我这个环境 docker pull一致连不上网，很奇怪，就没有运行这个。不过后面从别的机子上拷过来的镜像能正常运行，证明安装成功</p>
+<h2 id="安装-nvidia-docker"><a class="markdownIt-Anchor" href="#安装-nvidia-docker"></a> 安装 nvidia-docker</h2>
+<p>官方文档 <a target="_blank" rel="noopener" href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker">https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html#docker</a></p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">distribution=$(. /etc/os-release;<span class="built_in">echo</span> $ID<span class="variable">$VERSION_ID</span>) &amp;&amp; curl -s -L https://nvidia.github.io/libnvidia-container/<span class="variable">$distribution</span>/libnvidia-container.repo | sudo <span class="built_in">tee</span> /etc/yum.repos.d/nvidia-container-toolkit.repo</span><br><span class="line"></span><br><span class="line">yum clean expire-cache</span><br><span class="line"></span><br><span class="line">yum install -y nvidia-container-toolkit</span><br><span class="line"></span><br><span class="line">nvidia-ctk runtime configure --runtime=docker</span><br></pre></td></tr></table></figure>
+<p>依次运行上述命令，至此 nvidia-docker 的安装基本完成</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">#重启 docker</span></span><br><span class="line">systemctl restart docker</span><br><span class="line"></span><br><span class="line"><span class="comment">#验证是否成功</span></span><br><span class="line">docker run --<span class="built_in">rm</span> --runtime=nvidia --gpus all nvidia/cuda:11.6.2-base-ubuntu20.04 nvidia-smi</span><br></pre></td></tr></table></figure>
+<p>自此可以在 docker 中使用 nvidia-gpu 了</p>
+<p>但是目前还没有 nvidia-docker 的命令行工具，启动只能通过–runtime=nvidia --gpus all 的形式指定<br>
+所以接下来安装 nvidia-docker</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">#安装 nvidia-docker cli 工具</span></span><br><span class="line">yum install nvidia-docker2</span><br></pre></td></tr></table></figure>
+<h2 id="修改镜像存储位置"><a class="markdownIt-Anchor" href="#修改镜像存储位置"></a> 修改镜像存储位置</h2>
+<p>之前安装好的 docker 的默认镜像存储位置为 <code>/var/lib/docker</code></p>
+<p>但是/var目录一般空间较小，经常遇到存储空间不够的问题，所以需要换个位置存储</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">#查看信息</span></span><br><span class="line">docker info</span><br><span class="line"></span><br><span class="line"><span class="comment">#可以看到 docker root dir 是/var/lib/docker</span></span><br><span class="line"><span class="comment">######</span></span><br><span class="line"><span class="comment">#...</span></span><br><span class="line"><span class="comment">#Docker Root Dir: /var/lib/docker</span></span><br><span class="line"><span class="comment">#...</span></span><br><span class="line"><span class="comment">######</span></span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="comment"># 编辑docker 配置文件,添加 data-root 为/home/docker</span></span><br><span class="line">vim /etc/docker/daemon.json</span><br><span class="line"></span><br><span class="line">&#123;</span><br><span class="line">    ...</span><br><span class="line">    <span class="string">&quot;data-root&quot;</span>: <span class="string">&quot;/home/docker&quot;</span></span><br><span class="line">    ...</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="comment"># 修改完成后重启 docker</span></span><br><span class="line">systemctl restart docker</span><br></pre></td></tr></table></figure>
+<p>修改完成后再次查看 <code>docker info</code>，会发现目录已经修改，可以随意 pull 了</p>
+
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">环境配置</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/编程笔记//" class="article-tag-list-link color5">编程笔记</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2023/05/04/nvidia-docker-install/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-cuda-macro" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2023/05/04/cuda-macro/">CUDA ERROR CHECK 宏</a>
+    </h1>
+  
+
+        
+        <a href="/2023/05/04/cuda-macro/" class="archive-article-date">
+  	<time datetime="2023-05-04T03:08:59.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2023-05-04</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <h1 id="cuda-error-check-宏"><a class="markdownIt-Anchor" href="#cuda-error-check-宏"></a> CUDA ERROR CHECK 宏</h1>
+<p>CUDA 代码出错时往往不会第一时间报错并终止程序，程序报错的地方可能并不是真正出问题的地方</p>
+<p>可以利用自定义宏，方便的判断 CUDA 内置函数的返回值与检查cuda 程序运行状态，及时发现程序问题</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span><span class="string">&lt;stdio.h&gt;</span></span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CUDA_SAFE_CALL(err)           __cudaSafeCall      (err, __FILE__, __LINE__)</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">inline</span> <span class="type">void</span> __cudaSafeCall( cudaError err, <span class="type">const</span> <span class="type">char</span> *file, <span class="type">const</span> <span class="type">int</span> line )</span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">if</span>( cudaSuccess != err) &#123;</span><br><span class="line">        <span class="built_in">fprintf</span>(stderr, <span class="string">&quot;%s(%i) : cudaSafeCall() Runtime API error %d: %s.\n&quot;</span>,</span><br><span class="line">                file, line, (<span class="type">int</span>)err, <span class="built_in">cudaGetErrorString</span>( err ) );</span><br><span class="line">        <span class="built_in">exit</span>(<span class="number">-1</span>);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CUDA_CHECK_ERROR()    __cudaCheckError( __FILE__, __LINE__ )</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">inline</span> <span class="type">void</span> __cudaCheckError( <span class="type">const</span> <span class="type">char</span> *file, <span class="type">const</span> <span class="type">int</span> line )</span><br><span class="line">&#123;</span><br><span class="line"></span><br><span class="line">    cudaError err = <span class="built_in">cudaGetLastError</span>();</span><br><span class="line">    <span class="keyword">if</span> ( cudaSuccess != err )</span><br><span class="line">    &#123;</span><br><span class="line">        <span class="built_in">fprintf</span>( stderr, <span class="string">&quot;cudaCheckError() failed at %s:%i : %s\n&quot;</span>,</span><br><span class="line">                 file, line, <span class="built_in">cudaGetErrorString</span>( err ) );</span><br><span class="line">        <span class="built_in">exit</span>( <span class="number">-1</span> );</span><br><span class="line">    &#125;</span><br><span class="line">    </span><br><span class="line">    <span class="keyword">return</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CUDA_CHECK_ERROR_SYNC()    __cudaCheckErrorSync( __FILE__, __LINE__ )</span></span><br><span class="line"></span><br><span class="line"><span class="keyword">inline</span> <span class="type">void</span> __cudaCheckErrorSync( <span class="type">const</span> <span class="type">char</span> *file, <span class="type">const</span> <span class="type">int</span> line )</span><br><span class="line">&#123;</span><br><span class="line"></span><br><span class="line">    <span class="comment">// More careful checking. However, this will affect performance.</span></span><br><span class="line">    err = <span class="built_in">cudaDeviceSynchronize</span>();</span><br><span class="line">    <span class="keyword">if</span>( cudaSuccess != err )</span><br><span class="line">    &#123;</span><br><span class="line">        <span class="built_in">fprintf</span>( stderr, <span class="string">&quot;cudaCheckError() with sync failed at %s:%i : %s\n&quot;</span>,</span><br><span class="line">                 file, line, <span class="built_in">cudaGetErrorString</span>( err ) );</span><br><span class="line">        <span class="built_in">exit</span>( <span class="number">-1</span> );</span><br><span class="line">    &#125;</span><br><span class="line">    </span><br><span class="line">    <span class="keyword">return</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
+<p>宏CUDA_SAFE_CALL的作用是检查 cuda 内置函数的返回值，若返回不为 success 则打印错误信息并退出程序，如</p>
+<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="built_in">CUDA_SAFE_CALL</span>(<span class="built_in">CudaMalloc</span>(*****))</span><br></pre></td></tr></table></figure>
+<p>CUDA_CHECK_ERROR与CUDA_CHECK_ERROR_SYNC的作用是在程序中获取最近的一个错误的信息，常被用来检查核函数的错误。SYNC 多了一个同步操作，所以其检查更为精准，但是同步会带来较大的性能开销，最好是用 debug 等宏进行修饰，避免影响正确运行的程序的性能。</p>
+
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2023/05/04/cuda-macro/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
     <article id="post-cmake1" class="article article-type-post  article-index" itemscope itemprop="blogPost">
   <div class="article-inner">
     
@@ -526,617 +1306,9 @@
 
 
   
-    <article id="post-leetcode-986" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2021/08/08/leetcode-986/">leetcode 986 区间列表的交集</a>
-    </h1>
-  
-
-        
-        <a href="/2021/08/08/leetcode-986/" class="archive-article-date">
-  	<time datetime="2021-08-08T07:56:43.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-08-08</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="leetcode-986-区间列表的交集"><a class="markdownIt-Anchor" href="#leetcode-986-区间列表的交集"></a> leetcode 986 区间列表的交集</h1>
-<p><a href="https://leetcode-cn.com/problems/interval-list-intersections/" target="_blank" rel="noopener">题目地址</a></p>
-<p>由于每个列表的区间都是互不重叠且排好序的，所以可以利用归并排序的方法，从两个列表的头上取出来两个小区间判断</p>
-<p>之后删除掉较小的那个</p>
-<p>判断两个区间的交点的代码如下</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">int</span> lo = max(firstList[p1][<span class="number">0</span>],secondList[p2][<span class="number">0</span>]);</span><br><span class="line"><span class="keyword">int</span> hi = min(firstList[p1][<span class="number">1</span>],secondList[p2][<span class="number">1</span>]);</span><br><span class="line"><span class="keyword">if</span>(lo<=hi){</span><br><span class="line">    ret.push_back({lo,hi});</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
-<p>如果没有交点，lo会比hi大，否则证明二者有交点</p>
-<p>最后去掉较小的区间，继续比较，就是个正常的归并排序</p>
-<p>代码如下</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="built_in">vector</span><<span class="built_in">vector</span><<span class="keyword">int</span>>> <span class="title">intervalIntersection</span><span class="params">(<span class="built_in">vector</span><<span class="built_in">vector</span><<span class="keyword">int</span>>>& firstList, <span class="built_in">vector</span><<span class="built_in">vector</span><<span class="keyword">int</span>>>& secondList)</span> </span>{</span><br><span class="line">        <span class="keyword">int</span> n = firstList.size();</span><br><span class="line">        <span class="keyword">int</span> m = secondList.size();</span><br><span class="line">        <span class="built_in">vector</span><<span class="built_in">vector</span><<span class="keyword">int</span>>> ret;</span><br><span class="line">        <span class="keyword">int</span> p1 = <span class="number">0</span>;</span><br><span class="line">        <span class="keyword">int</span> p2 = <span class="number">0</span>;</span><br><span class="line">        <span class="keyword">while</span>(p1<n&&p2<m){< span><br><span class="line">            <span class="keyword">int</span> lo = max(firstList[p1][<span class="number">0</span>],secondList[p2][<span class="number">0</span>]);</span><br><span class="line">            <span class="keyword">int</span> hi = min(firstList[p1][<span class="number">1</span>],secondList[p2][<span class="number">1</span>]);</span><br><span class="line">            <span class="keyword">if</span>(lo<=hi){</span><br><span class="line">                ret.push_back({lo,hi});</span><br><span class="line">            }</span><br><span class="line">            <span class="keyword">if</span>(firstList[p1][<span class="number">1</span>]>secondList[p2][<span class="number">1</span>]){</span><br><span class="line">                p2++;</span><br><span class="line">            }<span class="keyword">else</span>{</span><br><span class="line">                p1++;</span><br><span class="line">            }</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> ret;</span><br><span class="line">    }</span><br><span class="line">};</span><br></n&&p2<m){<></span></pre></td></tr></tbody></table></figure></div>
-</body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">双指针</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2021/08/08/leetcode-986/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-leetcode-11" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2021/07/31/leetcode-11/">leetcode 11 盛最多水的容器</a>
-    </h1>
-  
-
-        
-        <a href="/2021/07/31/leetcode-11/" class="archive-article-date">
-  	<time datetime="2021-07-31T14:11:46.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-31</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="leetcode-11-盛最多水的容器"><a class="markdownIt-Anchor" href="#leetcode-11-盛最多水的容器"></a> leetcode 11 盛最多水的容器</h1>
-<p><a href="https://leetcode-cn.com/problems/container-with-most-water/" target="_blank" rel="noopener">题目链接</a></p>
-<p>这个题目上来根本想不到用双指针的方法（还是见得少了），动态规划搞了半天才发现用双指针是这么的简介</p>
-<p>双指针也很好理解，就是两个指针维护左右边界，由于盛水的量其实取决于短的那块板子，所以每次更新短的那块板子，就是向里移动一个位置，每这么更新一次就算一次盛水的容量看看是不是比之前的值更大。最后返回最大值</p>
-<p>所以我们令left=0,right=size()-1,循环的条件自然而然的是left < right</p>
-<p>代码如下</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">maxArea</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& height)</span> </span>{</span><br><span class="line">        <span class="keyword">int</span> n=height.size();</span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>,r=n<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">int</span> ret=<span class="number">0</span>;</span><br><span class="line">        <span class="keyword">while</span>(l<r){< span><br><span class="line">            ret=max(ret,(r-l)*min(height[l],height[r]));</span><br><span class="line">            <span class="keyword">if</span>(height[l]<height[r]) l++;< span><br><span class="line">            <span class="keyword">else</span> r--;</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> ret;</span><br><span class="line">    }</span><br><span class="line">};</span><br></height[r])></span></r){<></span></pre></td></tr></tbody></table></figure></div></body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">双指针</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2021/07/31/leetcode-11/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-leetcode-162" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2021/07/26/leetcode-162/">leetcode 162 寻找峰值</a>
-    </h1>
-  
-
-        
-        <a href="/2021/07/26/leetcode-162/" class="archive-article-date">
-  	<time datetime="2021-07-26T14:30:20.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-26</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="leetcode-162-寻找峰值"><a class="markdownIt-Anchor" href="#leetcode-162-寻找峰值"></a> leetcode 162 寻找峰值</h1>
-<p><a href="https://leetcode-cn.com/problems/search-in-rotated-sorted-array/" target="_blank" rel="noopener">题目原地址</a></p>
-<p>题目比较简单，就是寻找数组中的极大值，由于假定数组的两端均为负无穷，所以如果数组为单调递增或者单调递减，极值就在数组的两端</p>
-<p>如果遍历自然是很简单的，这里就不多说，这里说下logn复杂度的二分法解法</p>
-<p>思路也比较简单，找到中点，然后判断中点与左右两边的大小，</p>
-<ul>
-<li>如果比左右两边都大，则这就是极值点，返回</li>
-<li>如果 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo>−</mo><mn>1</mn><mo stretchy="false">]</mo><mo>></mo><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo stretchy="false">]</mo><mo>></mo><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo>+</mo><mn>1</mn><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">nums[mid-1]>nums[mid]>nums[mid+1]</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">]</span></span></span></span> 则令right=mid,极值点在左侧</li>
-<li>如果 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo>−</mo><mn>1</mn><mo stretchy="false">]</mo><mo><</mo><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo stretchy="false">]</mo><mo><</mo><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo>+</mo><mn>1</mn><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">nums[mid-1]<nums[mid]<nums[mid+1]< annotation></nums[mid]<nums[mid+1]<></annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel"><</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel"><</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">]</span></span></span></span> 则令left=mid,极值点在右侧</li>
-<li>如果 比左右两侧都小，则随便往那一侧都可以（代码中默认往右）</li>
-</ul>
-<p>结束的条件跟以往不同，如果left与right相邻了，则说明都到这一步了还没发现极值，所以极值肯定在他俩中间最大的那个</p>
-<p>代码如下</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">findPeakElement</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& nums)</span> </span>{</span><br><span class="line">        <span class="keyword">int</span> n = nums.size();</span><br><span class="line">        <span class="keyword">if</span>(n==<span class="number">1</span>) <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">        <span class="keyword">if</span>(n==<span class="number">2</span>) <span class="keyword">return</span> nums[<span class="number">0</span>]>nums[<span class="number">1</span>]?<span class="number">0</span>:<span class="number">1</span>;</span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>;<span class="keyword">int</span> r=n<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">while</span>(r-l><span class="number">1</span>){</span><br><span class="line">            <span class="keyword">int</span> m = (r+l)/<span class="number">2</span>;</span><br><span class="line">            <span class="keyword">if</span>(nums[m]>nums[m+<span class="number">1</span>]&&nums[m]>nums[m<span class="number">-1</span>]) <span class="keyword">return</span> m;</span><br><span class="line">            <span class="keyword">else</span> <span class="keyword">if</span>(nums[m]<nums[m+<span class="number">1</nums[m+<span></span>]) l=m;<br><span class="line">            <span class="keyword">else</span> r=m;</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> nums[l]>nums[r]?l:r; </span><br><span class="line">    }</span><br><span class="line">};</span><br></pre></td></tr></tbody></table></figure></div></body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">二分法</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2021/07/26/leetcode-162/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-leetcode-74" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2021/07/25/leetcode-74/">leetcode 74 搜索二维矩阵</a>
-    </h1>
-  
-
-        
-        <a href="/2021/07/25/leetcode-74/" class="archive-article-date">
-  	<time datetime="2021-07-25T15:12:59.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-25</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="leetcode-74-搜索二维矩阵"><a class="markdownIt-Anchor" href="#leetcode-74-搜索二维矩阵"></a> leetcode 74 搜索二维矩阵</h1>
-<p><a href="https://leetcode-cn.com/problems/search-a-2d-matrix/" target="_blank" rel="noopener">题目链接</a><br>
-本来没想做这个题的，但是想做其他题的hexo new的时候不小心new错了名字，所以就顺便一写</p>
-<p>这个题目不知道怎么混到中等题里的，就是个简单的二分搜索，只不过从用一维数组改成了二维数组</p>
-<p>如果传入的是类似于 <strong>int mat[M][N]</strong> 这样的二维数组,直接按一位数组来取就好了，因为底层其实就是个一维数组</p>
-<p>如果传入的是vector，则需要做一下转换，初始的left依然是0，right则是M*N-1,算出来的mid需要转换为矩阵的行号和列号（具体转换方式可以看下面代码）</p>
-<p>由于比较简单就不多啰嗦了，下面是代码，后面可能这种披着中等题的简单题或者思路比较直白的题就不更了。</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="keyword">bool</span> <span class="title">searchMatrix</span><span class="params">(<span class="built_in">vector</span><<span class="built_in">vector</span><<span class="keyword">int</span>>>& matrix, <span class="keyword">int</span> target)</span> </span>{</span><br><span class="line">        <span class="keyword">int</span> m = matrix.size();</span><br><span class="line">        <span class="keyword">int</span> n = matrix[<span class="number">0</span>].size();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>;</span><br><span class="line">        <span class="keyword">int</span> r = m*n<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">while</span>(l<=r){</span><br><span class="line">            <span class="keyword">int</span> mid=(r-l)/<span class="number">2</span>+l;</span><br><span class="line">            <span class="keyword">int</span> row = mid/n;</span><br><span class="line">            <span class="keyword">int</span> col = mid%n;</span><br><span class="line">            <span class="keyword">if</span>(matrix[row][col]==target) <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">            <span class="keyword">if</span>(matrix[row][col]>target){</span><br><span class="line">                r = mid<span class="number">-1</span>;</span><br><span class="line">            }<span class="keyword">else</span>{</span><br><span class="line">                l=mid+<span class="number">1</span>;</span><br><span class="line">            }</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">    }</span><br><span class="line">};</span><br></pre></td></tr></tbody></table></figure></div>
-</body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">二分法</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2021/07/25/leetcode-74/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-leetcode-33" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2021/07/25/leetcode-33/">leetcode 33 搜索旋转排序数组</a>
-    </h1>
-  
-
-        
-        <a href="/2021/07/25/leetcode-33/" class="archive-article-date">
-  	<time datetime="2021-07-25T14:33:33.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-25</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="leetcode-33-搜索旋转排序数组"><a class="markdownIt-Anchor" href="#leetcode-33-搜索旋转排序数组"></a> leetcode 33 搜索旋转排序数组</h1>
-<p><a href="https://leetcode-cn.com/problems/search-in-rotated-sorted-array/" target="_blank" rel="noopener">题目原地址</a></p>
-<p>这个题需要仔细思考一下判断的条件，由于不是完全有序而是部分有序，所以不能像普通二分一样简单的判断大小</p>
-<p>举个简单的例子<br>
-对于数组**nums=[6,7,8,9,1,2,3,4]**来说</p>
-<p>left=0,right=8</p>
-<p>通过二分计算出的中点idx=4 ,值为1 ，如果中点就是target，这当然皆大欢喜，直接返回对应的坐标就好</p>
-<p>如果不是，这时候中点将数组划分成了两部分，其中至少有一部分是有序的数组，在本例中，中点右侧的**[2,3,4]**有序</p>
-<p>那该如何判断哪边的数组有序呢，也比较简单，只需要比较nums[mid]与nums[left]的大小即可，若 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo stretchy="false">]</mo><mo>></mo><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>l</mi><mi>e</mi><mi>f</mi><mi>t</mi><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">nums[mid]>nums[left]</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault" style="margin-right:0.01968em;">l</span><span class="mord mathdefault">e</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mord mathdefault">t</span><span class="mclose">]</span></span></span></span>,则mid左侧有序，否则右侧有序。</p>
-<p>之后我们需要比较target与num[mid]的大小，这时候也会涉及到分类讨论，由于markdown这传图片麻烦得很，就不再赘述了，自己画画图就能方便的看出，也可以看我发的连接里的官方题解里的视频讲解，那里面有图方便理解</p>
-<p>代码如下</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">search</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& nums, <span class="keyword">int</span> target)</span> </span>{</span><br><span class="line">        <span class="keyword">int</span> n = nums.size();</span><br><span class="line">        <span class="keyword">if</span>(n==<span class="number">0</span>) <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">if</span>(n==<span class="number">1</span>) <span class="keyword">return</span> nums[<span class="number">0</span>]==target?<span class="number">0</span>:<span class="number">-1</span>;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>,r=n<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">while</span>(l<=r){</span><br><span class="line">            <span class="keyword">int</span> mid = (r-l)/<span class="number">2</span>+l;</span><br><span class="line">            <span class="keyword">if</span>(nums[mid]==target) <span class="keyword">return</span> mid;</span><br><span class="line">            <span class="keyword">if</span>(nums[mid]>=nums[l]){</span><br><span class="line">                <span class="keyword">if</span>(nums[mid]<target){< span><br><span class="line">                    l=mid+<span class="number">1</span>;</span><br><span class="line">                }<span class="keyword">else</span>{</span><br><span class="line">                    <span class="keyword">if</span>(target<nums[l]) l="mid+<span" class="number">1</nums[l])></span>;</target){<></span><br><span class="line">                    <span class="keyword">else</span> r=mid<span class="number">-1</span>;</span><br><span class="line">                }</span><br><span class="line">            }<span class="keyword">else</span>{</span><br><span class="line">                <span class="keyword">if</span>(nums[mid]>target){</span><br><span class="line">                    r=mid<span class="number">-1</span>;</span><br><span class="line">                }<span class="keyword">else</span>{</span><br><span class="line">                    <span class="keyword">if</span>(target<nums[l]) l="mid+<span" class="number">1</nums[l])></span>;<br><span class="line">                    <span class="keyword">else</span> r=mid<span class="number">-1</span>; </span><br><span class="line">                }</span><br><span class="line">            }</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">    }</span><br><span class="line">};</span><br></pre></td></tr></tbody></table></figure></div></body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">二分法</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2021/07/25/leetcode-33/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-leetcode-34" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2021/07/25/leetcode-34/">leetcode 34 在排序数组中查找元素的第一个和最后一个位置</a>
-    </h1>
-  
-
-        
-        <a href="/2021/07/25/leetcode-34/" class="archive-article-date">
-  	<time datetime="2021-07-25T12:48:51.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-25</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="leetcode-34-在排序数组中查找元素的第一个和最后一个位置"><a class="markdownIt-Anchor" href="#leetcode-34-在排序数组中查找元素的第一个和最后一个位置"></a> leetcode 34 在排序数组中查找元素的第一个和最后一个位置</h1>
-<p>几个月前找实习的时候刷过这道题，这几天突然碰到了结果忘了，重新记录一下</p>
-<p><a href="https://leetcode-cn.com/problems/find-first-and-last-position-of-element-in-sorted-array/" target="_blank" rel="noopener">leetcode题目地址</a></p>
-<p>题目简单来说是在升序的数组中找到等于target的第一个元素和最后一个元素</p>
-<p>思路也比较简单，<u>第一个大于target的数的前一位就是最后一个元素</u> , <u>第一个小于target的元素的后一个就是第一个元素</u>。</p>
-<p>于是代码如下</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="comment">//找到第一个小于target的后一个位置</span></span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">binarySearchEx1</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& nums, <span class="keyword">int</span> target)</span></span>{</span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>;<span class="keyword">int</span> r=nums.size()<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">int</span> ans=<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">while</span>(l<=r){</span><br><span class="line">            <span class="keyword">int</span> mid = (r-l)/<span class="number">2</span>+l;</span><br><span class="line">            <span class="keyword">if</span>(nums[mid]>=target){</span><br><span class="line">                r=mid<span class="number">-1</span>;</span><br><span class="line">                </span><br><span class="line">            }<span class="keyword">else</span>{</span><br><span class="line">                l=mid+<span class="number">1</span>;</span><br><span class="line">                ans=mid;</span><br><span class="line">            }</span><br><span class="line">        }   </span><br><span class="line">        <span class="keyword">return</span> ans+<span class="number">1</span>;</span><br><span class="line">    }</span><br><span class="line">    <span class="comment">// Ex2 找到第一个比target大的位置的前一个</span></span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">binarySearchEx2</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& nums, <span class="keyword">int</span> target)</span></span>{</span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>;<span class="keyword">int</span> r=nums.size()<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">int</span> ans=nums.size();</span><br><span class="line">        <span class="keyword">while</span>(l<=r){</span><br><span class="line">            <span class="keyword">int</span> mid = (r-l)/<span class="number">2</span>+l;</span><br><span class="line">            <span class="keyword">if</span>(nums[mid]>target){</span><br><span class="line">                r=mid<span class="number">-1</span>;</span><br><span class="line">                ans=mid;</span><br><span class="line">            }<span class="keyword">else</span>{</span><br><span class="line">                l=mid+<span class="number">1</span>;</span><br><span class="line">            }</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> ans<span class="number">-1</span>;</span><br><span class="line"></span><br><span class="line">    }</span><br><span class="line">    <span class="function"><span class="built_in">vector</span><<span class="keyword">int</span>> <span class="title">searchRange</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& nums, <span class="keyword">int</span> target)</span> </span>{</span><br><span class="line">        <span class="function"><span class="built_in">vector</span><<span class="keyword">int</span>> <span class="title">ret</span><span class="params">(<span class="number">2</span>,<span class="number">-1</span>)</span></span>;</span><br><span class="line">        <span class="keyword">if</span>(nums.size()==<span class="number">0</span>) <span class="keyword">return</span> ret;</span><br><span class="line">        ret[<span class="number">0</span>] = binarySearchEx1(nums,target);</span><br><span class="line">        ret[<span class="number">1</span>] = binarySearchEx2(nums,target);</span><br><span class="line">        <span class="keyword">if</span>(ret[<span class="number">0</span>]<=ret[<span class="number">1</span>]&&ret[<span class="number">0</span>]>=<span class="number">0</span>&&ret[<span class="number">0</span>]<=nums.size()&&nums[ret[<span class="number">0</span>]]==target&&nums[ret[<span class="number">1</span>]]==target)</span><br><span class="line">        <span class="keyword">return</span> ret;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> <span class="built_in">vector</span><<span class="keyword">int</span>>{<span class="number">-1</span>,<span class="number">-1</span>};</span><br><span class="line">    }</span><br><span class="line">};</span><br></pre></td></tr></tbody></table></figure></div>
-<p>还有更多优化的方法，比如Ex1和Ex2可以合成一个，可以参考leetcode的题解</p>
-</body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">二分法</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2021/07/25/leetcode-34/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
   
     <nav id="page-nav">
-      <span class="page-number current">1</span><a class="page-number" href="/page/2/">2</a><a class="page-number" href="/page/3/">3</a><a class="extend next" rel="next" href="/page/2/">Next &amp;raquo;</a>
+      <span class="page-number current">1</span><a class="page-number" href="/page/2/">2</a><a class="page-number" href="/page/3/">3</a><a class="page-number" href="/page/4/">4</a><a class="extend next" rel="next" href="/page/2/">Next &amp;raquo;</a>
     </nav>
   
 
@@ -1148,7 +1320,7 @@
   <div class="outer">
     <div id="footer-info">
     	<div class="footer-left">
-    		&copy; 2022 Yuyang Gao
+    		&copy; 2023 Yuyang Gao
     	</div>
       	<div class="footer-right">
       		<a href="http://hexo.io/" target="_blank">Hexo</a>  Theme <a href="https://github.com/litten/hexo-theme-yilia" target="_blank">Yilia</a> by Litten

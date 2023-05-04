@@ -152,6 +152,614 @@
           <div id="js-content" class="content-ll">
             
   
+    <article id="post-leetcode-986" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2021/08/08/leetcode-986/">leetcode 986 区间列表的交集</a>
+    </h1>
+  
+
+        
+        <a href="/2021/08/08/leetcode-986/" class="archive-article-date">
+  	<time datetime="2021-08-08T07:56:43.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-08-08</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="leetcode-986-区间列表的交集"><a class="markdownIt-Anchor" href="#leetcode-986-区间列表的交集"></a> leetcode 986 区间列表的交集</h1>
+<p><a href="https://leetcode-cn.com/problems/interval-list-intersections/" target="_blank" rel="noopener">题目地址</a></p>
+<p>由于每个列表的区间都是互不重叠且排好序的，所以可以利用归并排序的方法，从两个列表的头上取出来两个小区间判断</p>
+<p>之后删除掉较小的那个</p>
+<p>判断两个区间的交点的代码如下</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">int</span> lo = max(firstList[p1][<span class="number">0</span>],secondList[p2][<span class="number">0</span>]);</span><br><span class="line"><span class="keyword">int</span> hi = min(firstList[p1][<span class="number">1</span>],secondList[p2][<span class="number">1</span>]);</span><br><span class="line"><span class="keyword">if</span>(lo<=hi){</span><br><span class="line">    ret.push_back({lo,hi});</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
+<p>如果没有交点，lo会比hi大，否则证明二者有交点</p>
+<p>最后去掉较小的区间，继续比较，就是个正常的归并排序</p>
+<p>代码如下</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="built_in">vector</span><<span class="built_in">vector</span><<span class="keyword">int</span>>> <span class="title">intervalIntersection</span><span class="params">(<span class="built_in">vector</span><<span class="built_in">vector</span><<span class="keyword">int</span>>>& firstList, <span class="built_in">vector</span><<span class="built_in">vector</span><<span class="keyword">int</span>>>& secondList)</span> </span>{</span><br><span class="line">        <span class="keyword">int</span> n = firstList.size();</span><br><span class="line">        <span class="keyword">int</span> m = secondList.size();</span><br><span class="line">        <span class="built_in">vector</span><<span class="built_in">vector</span><<span class="keyword">int</span>>> ret;</span><br><span class="line">        <span class="keyword">int</span> p1 = <span class="number">0</span>;</span><br><span class="line">        <span class="keyword">int</span> p2 = <span class="number">0</span>;</span><br><span class="line">        <span class="keyword">while</span>(p1<n&&p2<m){< span><br><span class="line">            <span class="keyword">int</span> lo = max(firstList[p1][<span class="number">0</span>],secondList[p2][<span class="number">0</span>]);</span><br><span class="line">            <span class="keyword">int</span> hi = min(firstList[p1][<span class="number">1</span>],secondList[p2][<span class="number">1</span>]);</span><br><span class="line">            <span class="keyword">if</span>(lo<=hi){</span><br><span class="line">                ret.push_back({lo,hi});</span><br><span class="line">            }</span><br><span class="line">            <span class="keyword">if</span>(firstList[p1][<span class="number">1</span>]>secondList[p2][<span class="number">1</span>]){</span><br><span class="line">                p2++;</span><br><span class="line">            }<span class="keyword">else</span>{</span><br><span class="line">                p1++;</span><br><span class="line">            }</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> ret;</span><br><span class="line">    }</span><br><span class="line">};</span><br></n&&p2<m){<></span></pre></td></tr></tbody></table></figure></div>
+</body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">双指针</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2021/08/08/leetcode-986/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-leetcode-11" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2021/07/31/leetcode-11/">leetcode 11 盛最多水的容器</a>
+    </h1>
+  
+
+        
+        <a href="/2021/07/31/leetcode-11/" class="archive-article-date">
+  	<time datetime="2021-07-31T14:11:46.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-31</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="leetcode-11-盛最多水的容器"><a class="markdownIt-Anchor" href="#leetcode-11-盛最多水的容器"></a> leetcode 11 盛最多水的容器</h1>
+<p><a href="https://leetcode-cn.com/problems/container-with-most-water/" target="_blank" rel="noopener">题目链接</a></p>
+<p>这个题目上来根本想不到用双指针的方法（还是见得少了），动态规划搞了半天才发现用双指针是这么的简介</p>
+<p>双指针也很好理解，就是两个指针维护左右边界，由于盛水的量其实取决于短的那块板子，所以每次更新短的那块板子，就是向里移动一个位置，每这么更新一次就算一次盛水的容量看看是不是比之前的值更大。最后返回最大值</p>
+<p>所以我们令left=0,right=size()-1,循环的条件自然而然的是left < right</p>
+<p>代码如下</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">maxArea</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& height)</span> </span>{</span><br><span class="line">        <span class="keyword">int</span> n=height.size();</span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>,r=n<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">int</span> ret=<span class="number">0</span>;</span><br><span class="line">        <span class="keyword">while</span>(l<r){< span><br><span class="line">            ret=max(ret,(r-l)*min(height[l],height[r]));</span><br><span class="line">            <span class="keyword">if</span>(height[l]<height[r]) l++;< span><br><span class="line">            <span class="keyword">else</span> r--;</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> ret;</span><br><span class="line">    }</span><br><span class="line">};</span><br></height[r])></span></r){<></span></pre></td></tr></tbody></table></figure></div></body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">双指针</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2021/07/31/leetcode-11/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-leetcode-162" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2021/07/26/leetcode-162/">leetcode 162 寻找峰值</a>
+    </h1>
+  
+
+        
+        <a href="/2021/07/26/leetcode-162/" class="archive-article-date">
+  	<time datetime="2021-07-26T14:30:20.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-26</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="leetcode-162-寻找峰值"><a class="markdownIt-Anchor" href="#leetcode-162-寻找峰值"></a> leetcode 162 寻找峰值</h1>
+<p><a href="https://leetcode-cn.com/problems/search-in-rotated-sorted-array/" target="_blank" rel="noopener">题目原地址</a></p>
+<p>题目比较简单，就是寻找数组中的极大值，由于假定数组的两端均为负无穷，所以如果数组为单调递增或者单调递减，极值就在数组的两端</p>
+<p>如果遍历自然是很简单的，这里就不多说，这里说下logn复杂度的二分法解法</p>
+<p>思路也比较简单，找到中点，然后判断中点与左右两边的大小，</p>
+<ul>
+<li>如果比左右两边都大，则这就是极值点，返回</li>
+<li>如果 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo>−</mo><mn>1</mn><mo stretchy="false">]</mo><mo>></mo><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo stretchy="false">]</mo><mo>></mo><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo>+</mo><mn>1</mn><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">nums[mid-1]>nums[mid]>nums[mid+1]</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">]</span></span></span></span> 则令right=mid,极值点在左侧</li>
+<li>如果 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo>−</mo><mn>1</mn><mo stretchy="false">]</mo><mo><</mo><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo stretchy="false">]</mo><mo><</mo><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo>+</mo><mn>1</mn><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">nums[mid-1]<nums[mid]<nums[mid+1]< annotation></nums[mid]<nums[mid+1]<></annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel"><</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel"><</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mclose">]</span></span></span></span> 则令left=mid,极值点在右侧</li>
+<li>如果 比左右两侧都小，则随便往那一侧都可以（代码中默认往右）</li>
+</ul>
+<p>结束的条件跟以往不同，如果left与right相邻了，则说明都到这一步了还没发现极值，所以极值肯定在他俩中间最大的那个</p>
+<p>代码如下</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">findPeakElement</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& nums)</span> </span>{</span><br><span class="line">        <span class="keyword">int</span> n = nums.size();</span><br><span class="line">        <span class="keyword">if</span>(n==<span class="number">1</span>) <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">        <span class="keyword">if</span>(n==<span class="number">2</span>) <span class="keyword">return</span> nums[<span class="number">0</span>]>nums[<span class="number">1</span>]?<span class="number">0</span>:<span class="number">1</span>;</span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>;<span class="keyword">int</span> r=n<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">while</span>(r-l><span class="number">1</span>){</span><br><span class="line">            <span class="keyword">int</span> m = (r+l)/<span class="number">2</span>;</span><br><span class="line">            <span class="keyword">if</span>(nums[m]>nums[m+<span class="number">1</span>]&&nums[m]>nums[m<span class="number">-1</span>]) <span class="keyword">return</span> m;</span><br><span class="line">            <span class="keyword">else</span> <span class="keyword">if</span>(nums[m]<nums[m+<span class="number">1</nums[m+<span></span>]) l=m;<br><span class="line">            <span class="keyword">else</span> r=m;</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> nums[l]>nums[r]?l:r; </span><br><span class="line">    }</span><br><span class="line">};</span><br></pre></td></tr></tbody></table></figure></div></body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">二分法</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2021/07/26/leetcode-162/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-leetcode-74" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2021/07/25/leetcode-74/">leetcode 74 搜索二维矩阵</a>
+    </h1>
+  
+
+        
+        <a href="/2021/07/25/leetcode-74/" class="archive-article-date">
+  	<time datetime="2021-07-25T15:12:59.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-25</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="leetcode-74-搜索二维矩阵"><a class="markdownIt-Anchor" href="#leetcode-74-搜索二维矩阵"></a> leetcode 74 搜索二维矩阵</h1>
+<p><a href="https://leetcode-cn.com/problems/search-a-2d-matrix/" target="_blank" rel="noopener">题目链接</a><br>
+本来没想做这个题的，但是想做其他题的hexo new的时候不小心new错了名字，所以就顺便一写</p>
+<p>这个题目不知道怎么混到中等题里的，就是个简单的二分搜索，只不过从用一维数组改成了二维数组</p>
+<p>如果传入的是类似于 <strong>int mat[M][N]</strong> 这样的二维数组,直接按一位数组来取就好了，因为底层其实就是个一维数组</p>
+<p>如果传入的是vector，则需要做一下转换，初始的left依然是0，right则是M*N-1,算出来的mid需要转换为矩阵的行号和列号（具体转换方式可以看下面代码）</p>
+<p>由于比较简单就不多啰嗦了，下面是代码，后面可能这种披着中等题的简单题或者思路比较直白的题就不更了。</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="keyword">bool</span> <span class="title">searchMatrix</span><span class="params">(<span class="built_in">vector</span><<span class="built_in">vector</span><<span class="keyword">int</span>>>& matrix, <span class="keyword">int</span> target)</span> </span>{</span><br><span class="line">        <span class="keyword">int</span> m = matrix.size();</span><br><span class="line">        <span class="keyword">int</span> n = matrix[<span class="number">0</span>].size();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>;</span><br><span class="line">        <span class="keyword">int</span> r = m*n<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">while</span>(l<=r){</span><br><span class="line">            <span class="keyword">int</span> mid=(r-l)/<span class="number">2</span>+l;</span><br><span class="line">            <span class="keyword">int</span> row = mid/n;</span><br><span class="line">            <span class="keyword">int</span> col = mid%n;</span><br><span class="line">            <span class="keyword">if</span>(matrix[row][col]==target) <span class="keyword">return</span> <span class="literal">true</span>;</span><br><span class="line">            <span class="keyword">if</span>(matrix[row][col]>target){</span><br><span class="line">                r = mid<span class="number">-1</span>;</span><br><span class="line">            }<span class="keyword">else</span>{</span><br><span class="line">                l=mid+<span class="number">1</span>;</span><br><span class="line">            }</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">    }</span><br><span class="line">};</span><br></pre></td></tr></tbody></table></figure></div>
+</body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">二分法</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2021/07/25/leetcode-74/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-leetcode-33" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2021/07/25/leetcode-33/">leetcode 33 搜索旋转排序数组</a>
+    </h1>
+  
+
+        
+        <a href="/2021/07/25/leetcode-33/" class="archive-article-date">
+  	<time datetime="2021-07-25T14:33:33.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-25</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="leetcode-33-搜索旋转排序数组"><a class="markdownIt-Anchor" href="#leetcode-33-搜索旋转排序数组"></a> leetcode 33 搜索旋转排序数组</h1>
+<p><a href="https://leetcode-cn.com/problems/search-in-rotated-sorted-array/" target="_blank" rel="noopener">题目原地址</a></p>
+<p>这个题需要仔细思考一下判断的条件，由于不是完全有序而是部分有序，所以不能像普通二分一样简单的判断大小</p>
+<p>举个简单的例子<br>
+对于数组**nums=[6,7,8,9,1,2,3,4]**来说</p>
+<p>left=0,right=8</p>
+<p>通过二分计算出的中点idx=4 ,值为1 ，如果中点就是target，这当然皆大欢喜，直接返回对应的坐标就好</p>
+<p>如果不是，这时候中点将数组划分成了两部分，其中至少有一部分是有序的数组，在本例中，中点右侧的**[2,3,4]**有序</p>
+<p>那该如何判断哪边的数组有序呢，也比较简单，只需要比较nums[mid]与nums[left]的大小即可，若 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>m</mi><mi>i</mi><mi>d</mi><mo stretchy="false">]</mo><mo>></mo><mi>n</mi><mi>u</mi><mi>m</mi><mi>s</mi><mo stretchy="false">[</mo><mi>l</mi><mi>e</mi><mi>f</mi><mi>t</mi><mo stretchy="false">]</mo></mrow><annotation encoding="application/x-tex">nums[mid]>nums[left]</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault">m</span><span class="mord mathdefault">i</span><span class="mord mathdefault">d</span><span class="mclose">]</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mord mathdefault">u</span><span class="mord mathdefault">m</span><span class="mord mathdefault">s</span><span class="mopen">[</span><span class="mord mathdefault" style="margin-right:0.01968em;">l</span><span class="mord mathdefault">e</span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mord mathdefault">t</span><span class="mclose">]</span></span></span></span>,则mid左侧有序，否则右侧有序。</p>
+<p>之后我们需要比较target与num[mid]的大小，这时候也会涉及到分类讨论，由于markdown这传图片麻烦得很，就不再赘述了，自己画画图就能方便的看出，也可以看我发的连接里的官方题解里的视频讲解，那里面有图方便理解</p>
+<p>代码如下</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">search</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& nums, <span class="keyword">int</span> target)</span> </span>{</span><br><span class="line">        <span class="keyword">int</span> n = nums.size();</span><br><span class="line">        <span class="keyword">if</span>(n==<span class="number">0</span>) <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">if</span>(n==<span class="number">1</span>) <span class="keyword">return</span> nums[<span class="number">0</span>]==target?<span class="number">0</span>:<span class="number">-1</span>;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>,r=n<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">while</span>(l<=r){</span><br><span class="line">            <span class="keyword">int</span> mid = (r-l)/<span class="number">2</span>+l;</span><br><span class="line">            <span class="keyword">if</span>(nums[mid]==target) <span class="keyword">return</span> mid;</span><br><span class="line">            <span class="keyword">if</span>(nums[mid]>=nums[l]){</span><br><span class="line">                <span class="keyword">if</span>(nums[mid]<target){< span><br><span class="line">                    l=mid+<span class="number">1</span>;</span><br><span class="line">                }<span class="keyword">else</span>{</span><br><span class="line">                    <span class="keyword">if</span>(target<nums[l]) l="mid+<span" class="number">1</nums[l])></span>;</target){<></span><br><span class="line">                    <span class="keyword">else</span> r=mid<span class="number">-1</span>;</span><br><span class="line">                }</span><br><span class="line">            }<span class="keyword">else</span>{</span><br><span class="line">                <span class="keyword">if</span>(nums[mid]>target){</span><br><span class="line">                    r=mid<span class="number">-1</span>;</span><br><span class="line">                }<span class="keyword">else</span>{</span><br><span class="line">                    <span class="keyword">if</span>(target<nums[l]) l="mid+<span" class="number">1</nums[l])></span>;<br><span class="line">                    <span class="keyword">else</span> r=mid<span class="number">-1</span>; </span><br><span class="line">                }</span><br><span class="line">            }</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> <span class="number">-1</span>;</span><br><span class="line">    }</span><br><span class="line">};</span><br></pre></td></tr></tbody></table></figure></div></body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">二分法</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2021/07/25/leetcode-33/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-leetcode-34" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2021/07/25/leetcode-34/">leetcode 34 在排序数组中查找元素的第一个和最后一个位置</a>
+    </h1>
+  
+
+        
+        <a href="/2021/07/25/leetcode-34/" class="archive-article-date">
+  	<time datetime="2021-07-25T12:48:51.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-25</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="leetcode-34-在排序数组中查找元素的第一个和最后一个位置"><a class="markdownIt-Anchor" href="#leetcode-34-在排序数组中查找元素的第一个和最后一个位置"></a> leetcode 34 在排序数组中查找元素的第一个和最后一个位置</h1>
+<p>几个月前找实习的时候刷过这道题，这几天突然碰到了结果忘了，重新记录一下</p>
+<p><a href="https://leetcode-cn.com/problems/find-first-and-last-position-of-element-in-sorted-array/" target="_blank" rel="noopener">leetcode题目地址</a></p>
+<p>题目简单来说是在升序的数组中找到等于target的第一个元素和最后一个元素</p>
+<p>思路也比较简单，<u>第一个大于target的数的前一位就是最后一个元素</u> , <u>第一个小于target的元素的后一个就是第一个元素</u>。</p>
+<p>于是代码如下</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="comment">//找到第一个小于target的后一个位置</span></span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">binarySearchEx1</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& nums, <span class="keyword">int</span> target)</span></span>{</span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>;<span class="keyword">int</span> r=nums.size()<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">int</span> ans=<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">while</span>(l<=r){</span><br><span class="line">            <span class="keyword">int</span> mid = (r-l)/<span class="number">2</span>+l;</span><br><span class="line">            <span class="keyword">if</span>(nums[mid]>=target){</span><br><span class="line">                r=mid<span class="number">-1</span>;</span><br><span class="line">                </span><br><span class="line">            }<span class="keyword">else</span>{</span><br><span class="line">                l=mid+<span class="number">1</span>;</span><br><span class="line">                ans=mid;</span><br><span class="line">            }</span><br><span class="line">        }   </span><br><span class="line">        <span class="keyword">return</span> ans+<span class="number">1</span>;</span><br><span class="line">    }</span><br><span class="line">    <span class="comment">// Ex2 找到第一个比target大的位置的前一个</span></span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">binarySearchEx2</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& nums, <span class="keyword">int</span> target)</span></span>{</span><br><span class="line">        <span class="keyword">int</span> l=<span class="number">0</span>;<span class="keyword">int</span> r=nums.size()<span class="number">-1</span>;</span><br><span class="line">        <span class="keyword">int</span> ans=nums.size();</span><br><span class="line">        <span class="keyword">while</span>(l<=r){</span><br><span class="line">            <span class="keyword">int</span> mid = (r-l)/<span class="number">2</span>+l;</span><br><span class="line">            <span class="keyword">if</span>(nums[mid]>target){</span><br><span class="line">                r=mid<span class="number">-1</span>;</span><br><span class="line">                ans=mid;</span><br><span class="line">            }<span class="keyword">else</span>{</span><br><span class="line">                l=mid+<span class="number">1</span>;</span><br><span class="line">            }</span><br><span class="line">        }</span><br><span class="line">        <span class="keyword">return</span> ans<span class="number">-1</span>;</span><br><span class="line"></span><br><span class="line">    }</span><br><span class="line">    <span class="function"><span class="built_in">vector</span><<span class="keyword">int</span>> <span class="title">searchRange</span><span class="params">(<span class="built_in">vector</span><<span class="keyword">int</span>>& nums, <span class="keyword">int</span> target)</span> </span>{</span><br><span class="line">        <span class="function"><span class="built_in">vector</span><<span class="keyword">int</span>> <span class="title">ret</span><span class="params">(<span class="number">2</span>,<span class="number">-1</span>)</span></span>;</span><br><span class="line">        <span class="keyword">if</span>(nums.size()==<span class="number">0</span>) <span class="keyword">return</span> ret;</span><br><span class="line">        ret[<span class="number">0</span>] = binarySearchEx1(nums,target);</span><br><span class="line">        ret[<span class="number">1</span>] = binarySearchEx2(nums,target);</span><br><span class="line">        <span class="keyword">if</span>(ret[<span class="number">0</span>]<=ret[<span class="number">1</span>]&&ret[<span class="number">0</span>]>=<span class="number">0</span>&&ret[<span class="number">0</span>]<=nums.size()&&nums[ret[<span class="number">0</span>]]==target&&nums[ret[<span class="number">1</span>]]==target)</span><br><span class="line">        <span class="keyword">return</span> ret;</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> <span class="built_in">vector</span><<span class="keyword">int</span>>{<span class="number">-1</span>,<span class="number">-1</span>};</span><br><span class="line">    }</span><br><span class="line">};</span><br></pre></td></tr></tbody></table></figure></div>
+<p>还有更多优化的方法，比如Ex1和Ex2可以合成一个，可以参考leetcode的题解</p>
+</body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">二分法</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2021/07/25/leetcode-34/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
     <article id="post-cuda-pragma-unroll" class="article article-type-post  article-index" itemscope itemprop="blogPost">
   <div class="article-inner">
     
@@ -552,654 +1160,9 @@
 
 
   
-    <article id="post-cuda-reduction" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2021/07/23/cuda-reduction/">CUDA Reduction</a>
-    </h1>
-  
-
-        
-        <a href="/2021/07/23/cuda-reduction/" class="archive-article-date">
-  	<time datetime="2021-07-23T13:13:23.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-23</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="cuda-reduction"><a class="markdownIt-Anchor" href="#cuda-reduction"></a> cuda Reduction</h1>
-<p>有一段时间没更了，之前一直在想记录博客的意义何在，也没想出个所以然，但是不能三分钟热度，所以还是把之前想发的存货找一找</p>
-<p>这段时间在准备工作的事情，复习了下cuda，cuda的reduction是非常常见的，而众多的方法中尤以warp shfl的方法最为简便和高效，这里整理了下代码，简述思路，供自己以后查阅，也欢迎大家交流</p>
-<ul>
-<li>顺便一提，其实最近已经有了采用Tensor Core来进行reduction和scan操作的工作出现了，可以参考论文《Accelerating Reduction and Scan Using Tensor Core Units》，取得了比cub库更好的效果。期待随着WMMA API的进化，能让Tensor Core为除了MatMul以外的算法提供更好的计算效果。 *</li>
-</ul>
-<p>言归正传，基于warp shuffle 的reduction分为三部分：warp粒度的reduction，block粒度的reduction和整个device的reduction</p>
-<h3 id="warp-reduction"><a class="markdownIt-Anchor" href="#warp-reduction"></a> warp Reduction</h3>
-<p>其中warp粒度的reduction比较简洁，但也是整个reduction部分的核心，代码如下。<br>
-warpSize就是warp的大小，一般为32,这里是一个device函数，虽然代码简单，但是可以计算得到这32个线程的和</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">c</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight c"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> FULL_MASK 0xffffffff</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> WARPSIZE 32</span></span><br><span class="line"></span><br><span class="line"><span class="function">__device__ <span class="keyword">int</span> <span class="title">warp_shfl</span><span class="params">(<span class="keyword">int</span> val)</span> </span>{</span><br><span class="line">    <span class="keyword">for</span>(<span class="keyword">int</span> offset=WARPSIZE;offset><span class="number">0</span>;offset>>=<span class="number">1</span>){</span><br><span class="line">        val = __shfl_down_sync(FULL_MASK,val,offset,WARPSIZE);</span><br><span class="line">    }</span><br><span class="line">    <span class="keyword">return</span> val</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
-<h3 id="block-reduction"><a class="markdownIt-Anchor" href="#block-reduction"></a> block reduction</h3>
-<p>block的reduction 则会把每个warp计算的结果再进行一次reduction，由于当前卡的blockSize最大均不超过1024=32*32，所以我们可以将计算的结果在进行一次warpReduction得到计算的结果。</p>
-<p>当然在进行block reduction之前我们需要先把结果存储到shared memory中做一个暂存</p>
-<p>若每个线程负责多个元素（元素数目较多时）,则需要先将每个线程负责的元素做一个加法，代码如下</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">c</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight c"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">__global__ <span class="title">blockReduction</span><span class="params">(<span class="keyword">int</span> *in,<span class="keyword">int</span> *out,<span class="keyword">int</span> n)</span></span>{</span><br><span class="line">    <span class="keyword">int</span> tx = threadIdx.x;</span><br><span class="line">    <span class="keyword">int</span> idx = blockIdx.x*blockDim.x+tx;</span><br><span class="line">    <span class="keyword">int</span> nThread = blockDim.x*gridDim.x;</span><br><span class="line">    <span class="keyword">int</span> sum = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">    __shared__ <span class="keyword">int</span> sh[<span class="number">32</span>];</span><br><span class="line">    <span class="keyword">int</span> laneid = tx &<span class="number">0x1f</span>;</span><br><span class="line">    <span class="keyword">int</span> wid = tx >> <span class="number">5</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">//每个线程负责的元素先加起来</span></span><br><span class="line">    <span class="keyword">for</span>(<span class="keyword">int</span> i=<span class="number">0</span>;i<n;i+=nthread){< span><br><span class="line">        sum+=in[i];</span><br><span class="line">    }</span><br><span class="line">    <span class="comment">//warp shfl</span></span><br><span class="line">    sum = warp_shfl(sum);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span>(laneid==<span class="number">0</span>) sh[wid]=sum;</span><br><span class="line">    __syncthreads();</span><br><span class="line"></span><br><span class="line">    sum = tx<blockdim.x warpsize?sh[laneid]:<span class="number">0</blockdim.x></span>;</n;i+=nthread){<></span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span>(wid==<span class="number">0</span>) sum=warp_shfl(sum);</span><br><span class="line">    <span class="comment">//结果存到全局内存</span></span><br><span class="line">    <span class="keyword">if</span>(tx==<span class="number">0</span>) out[blockIdx.x]=sum;</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
-<h3 id="device-reduction"><a class="markdownIt-Anchor" href="#device-reduction"></a> device reduction</h3>
-<p>block内部由于有共享内存，做reduction比较方便，block之间一般采用将结果存到全局内存（上面代码的最后一行），在用单一block的进行进一步规约的形式，这里不再贴出代码，跟上面的形式大同小异</p>
-<p>以上是关于reduction的一些实现，更快速地利用张量核心的计算见本文最开始提到的论文，欢迎大家交流讨论。</p>
-</body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2021/07/23/cuda-reduction/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-memcpyAsync" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/10/23/memcpyAsync/">cuda异步内存复制</a>
-    </h1>
-  
-
-        
-        <a href="/2020/10/23/memcpyAsync/" class="archive-article-date">
-  	<time datetime="2020-10-23T09:26:55.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-10-23</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="cuda异步内存复制"><a class="markdownIt-Anchor" href="#cuda异步内存复制"></a> cuda异步内存复制</h1>
-<p>在cuda handbook中发现了一个利用cuda event来进行的异步的内存的复制，觉得比较巧妙，但是美中不足的是书中代码里存在一个bug，不过思想还是很不错的</p>
-<p>利用两个buffer来充当异步复制的缓冲区</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">void *g_hostBuffers[2];</span><br></pre></td></tr></tbody></table></figure></div>
-<p>定义需要的两个event,这里定义了之后就立马record，以便将来函数内第一次Sync时不会出错。</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">cudaEventCreate( &g_events[0] );</span><br><span class="line">cudaEventCreate( &g_events[1] );</span><br><span class="line">// record events so they are signaled on first synchronize</span><br><span class="line">cudaEventRecord( g_events[0], 0 );</span><br><span class="line">cudaEventRecord( g_events[1], 0 );</span><br></pre></td></tr></tbody></table></figure></div>
-<p>之后的内存分配和数据初始化部分我们就省略掉。接下来是最重要的函数部分</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">void</span><br><span class="line">chMemcpyHtoD( void *device, const void *host, size_t N ) </span><br><span class="line">{</span><br><span class="line">    cudaError_t status;</span><br><span class="line">    char *dst = (char *) device;</span><br><span class="line">    const char *src = (const char *) host;</span><br><span class="line">    int stagingIndex = 0;</span><br><span class="line">    while ( N ) {</span><br><span class="line">        size_t thisCopySize = min( N, STAGING_BUFFER_SIZE );</span><br><span class="line">        cudaEventSynchronize( g_events[stagingIndex] );</span><br><span class="line">        memcpy( g_hostBuffers[stagingIndex], src, thisCopySize ); </span><br><span class="line">        cudaMemcpyAsync( dst, g_hostBuffers[stagingIndex],thisCopySize, cudaMemcpyHostToDevice, NULL );</span><br><span class="line">        cudaEventRecord( g_events[stagingIndex], NULL );</span><br><span class="line">        dst += thisCopySize;</span><br><span class="line">        src += thisCopySize;</span><br><span class="line">        N -= thisCopySize;</span><br><span class="line">        stagingIndex = 1 - stagingIndex;</span><br><span class="line">    }</span><br><span class="line">    return;</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
-<p>这里我们可以看到在第11行我们把src里的数据拷贝到缓冲区中，之后12行执行一个异步的复制操作。<br>
-这个复制操作由于是异步的，所以很快就会返回，执行下一步记录的操作，这一轮的复制操作就结束了，之后更新index，把1变成0,0变成1。<br>
-当我们执行到下一轮的cudaEventSynchronize语句时，我们会等待index所指的事件结束，由于事件是在复制之后被记录的，事件结束也意味着异步复制的结束。这一步是保证当前index的下一个复制时前一个复制已经结束，这样就可以保证两个时间分别进行两个异步的内存复制。</p>
-<p>这里上述的代码是正确的，原书中的代码第13行是错误的，原书中g_event的索引是错误的，为g_events[1-stagingIndex]，这样会导致整个流程都在串行，因为刚刚记录的g_event[0]在下一轮就立马执行了cudaEventSynchronize。</p>
-<p>实验也证明了这一点，原书中的代码在实验室的TITAN V 显卡下的拷贝性能为<strong>2987.32 MB/s</strong>，而修改后上述的正确的代码的性能为<strong>4052.28 MB/s</strong></p>
-</body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/10/23/memcpyAsync/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-some-project" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/10/22/some-project/">一些项目和大作业汇总(持续更新)</a>
-    </h1>
-  
-
-        
-        <a href="/2020/10/22/some-project/" class="archive-article-date">
-  	<time datetime="2020-10-22T07:19:35.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-10-22</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="一些项目和大作业汇总"><a class="markdownIt-Anchor" href="#一些项目和大作业汇总"></a> 一些项目和大作业汇总</h1>
-<p>最近整理电脑，发现了以前写的一些小项目啊，大作业什么的，虽然大多数随着换电脑丢掉了，但是也保存下来了一部分，最近整理了一下传到了github上，这里也做一个汇总，如果大家有需要可以作参考。</p>
-<p>都是很久以前的代码了，写的比较烂，希望对大家能有一丁点的帮助</p>
-<p>这些代码的编写也或多或少的参考过网络的博客以及师兄师姐同学们的代码，感谢大家的帮助</p>
-<h2 id="计算机网络作业"><a class="markdownIt-Anchor" href="#计算机网络作业"></a> 计算机网络作业</h2>
-<p>研究生课程的计算机网络的大作业<br>
-<a href="https://github.com/WhatGhost/nku_network_hw" target="_blank" rel="noopener">https://github.com/WhatGhost/nku_network_hw</a></p>
-<p>其中每个里面都有当时提交作业时候的文档</p>
-<ul>
-<li>
-<p>HW3是一个FTP的客户端，通过发送请求判断返回码来进行一些操作。GUI用java写的。</p>
-</li>
-<li>
-<p>HW4是一个UDP聊天室，有服务器端和客户端两部分。</p>
-</li>
-</ul>
-<h2 id="简单c编译器"><a class="markdownIt-Anchor" href="#简单c编译器"></a> 简单C编译器</h2>
-<p>本科时候编译原理课程的大作业，简单的只支持浮点和整数的简单赋值和计算，以及if，while，for等简单分支语句的编译器。</p>
-<p><a href="https://github.com/WhatGhost/simple-c-compiler" target="_blank" rel="noopener">https://github.com/WhatGhost/simple-c-compiler</a></p>
-</body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">编程笔记</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">项目</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">日常</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/零碎的项目和代码//" class="article-tag-list-link color4">零碎的项目和代码</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/10/22/some-project/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-Quadratic-residue" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/09/25/Quadratic-residue/">二次剩余判定与求解</a>
-    </h1>
-  
-
-        
-        <a href="/2020/09/25/Quadratic-residue/" class="archive-article-date">
-  	<time datetime="2020-09-24T16:10:47.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-09-25</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="二次剩余"><a class="markdownIt-Anchor" href="#二次剩余"></a> 二次剩余</h1>
-<p>最近在做一些关于椭圆曲线的优化，其中message到点的映射需要用到二次剩余相关的知识，也是第一次接触相关算法，查了一些资料之后自己在GPU端实现了一下，记录一下相关的心得。</p>
-<p>一个整数X的平方 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>X</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">X^{2}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141079999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></span> 除以另一个整数p的余数，就叫做X对于整数p的二次剩余。也就是当存在某个X使得</p>
-<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>X</mi><mn>2</mn></msup><mo>≡</mo><mi>d</mi><mo stretchy="false">(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">X^{2} \equiv d (mod p) 
-</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8641079999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">≡</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">d</span><span class="mopen">(</span><span class="mord mathdefault">m</span><span class="mord mathdefault">o</span><span class="mord mathdefault">d</span><span class="mord mathdefault">p</span><span class="mclose">)</span></span></span></span></span></p>
-<p>则d就是模p的二次剩余。一般来说，p都是大素数。</p>
-<p>当需要判断一个x是否在椭圆曲线上时，需要计算 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>y</mi><mn>2</mn></msup><mo>=</mo><msup><mi>x</mi><mn>3</mn></msup><mo>+</mo><mi>a</mi><mi>x</mi><mo>+</mo><mi>b</mi></mrow><annotation encoding="application/x-tex">y^{2} = x^{3} +ax +b</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.008548em;vertical-align:-0.19444em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.03588em;">y</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.897438em;vertical-align:-0.08333em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">3</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.66666em;vertical-align:-0.08333em;"></span><span class="mord mathdefault">a</span><span class="mord mathdefault">x</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault">b</span></span></span></span><br>
-是否成立，也就是算<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>x</mi><mn>3</mn></msup><mo>+</mo><mi>a</mi><mi>x</mi><mo>+</mo><mi>b</mi></mrow><annotation encoding="application/x-tex">x^{3} +ax +b</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.897438em;vertical-align:-0.08333em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">3</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.66666em;vertical-align:-0.08333em;"></span><span class="mord mathdefault">a</span><span class="mord mathdefault">x</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault">b</span></span></span></span>是不是模p上的二次剩余</p>
-<h2 id="判断二次剩余"><a class="markdownIt-Anchor" href="#判断二次剩余"></a> 判断二次剩余</h2>
-<p>判断二次剩余可以用欧拉准则，但是欧拉准则也只能判断是不是，但是不能求解出具体的结果，用来验证足够了。</p>
-<p>欧拉准则提出，d是模p的二次剩余的充要条件就是</p>
-<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>d</mi><mrow><mo stretchy="false">(</mo><mi>p</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup><mo>≡</mo><mn>1</mn><mo stretchy="false">(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">d^{(p-1)/2} \equiv 1 (modp) 
-</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.938em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">d</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.938em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathdefault mtight">p</span><span class="mbin mtight">−</span><span class="mord mtight">1</span><span class="mclose mtight">)</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">≡</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mopen">(</span><span class="mord mathdefault">m</span><span class="mord mathdefault">o</span><span class="mord mathdefault">d</span><span class="mord mathdefault">p</span><span class="mclose">)</span></span></span></span></span></p>
-<p>d是模p的非二次剩余的充要条件就是</p>
-<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>d</mi><mrow><mo stretchy="false">(</mo><mi>p</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup><mo>≡</mo><mo>−</mo><mn>1</mn><mo stretchy="false">(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">d^{(p-1)/2} \equiv -1 (modp) 
-</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.938em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">d</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.938em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathdefault mtight">p</span><span class="mbin mtight">−</span><span class="mord mtight">1</span><span class="mclose mtight">)</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">≡</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">−</span><span class="mord">1</span><span class="mopen">(</span><span class="mord mathdefault">m</span><span class="mord mathdefault">o</span><span class="mord mathdefault">d</span><span class="mord mathdefault">p</span><span class="mclose">)</span></span></span></span></span></p>
-<p>这里由于椭圆曲线域上的这个素数p都是提前知道的，所以我们可以<strong>预先算出</strong>来(p-1)/2,这样就可以方便的计算，省掉了很多计算的步骤。对于模幂操作可以用蒙哥马利模乘来实现模幂。</p>
-<h2 id="求解二次剩余"><a class="markdownIt-Anchor" href="#求解二次剩余"></a> 求解二次剩余</h2>
-<p>欧拉准则只能做判断，当判断这个x的坐标在椭圆曲线上时，我们需要求得y的坐标，所以还需要求解二次剩余，这里两种方法，一种是Tonelli-Shanks算法，我在程序中采用了这种方法(由于素数p满足其中的特殊条件)，所以计算很快，只需要算一次模幂操作。。</p>
-<h3 id="tonelli-shanks"><a class="markdownIt-Anchor" href="#tonelli-shanks"></a> Tonelli-Shanks</h3>
-<p>这个算法其实网上有很多的介绍，这里多介绍，只说我在实现的时候看到的特殊情况<br>
-算法开始部分如下</p>
-<p><strong>输入为模p的一个二次剩余d，我们想得到的则是这个二次剩余的解X</strong>，使得<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>X</mi><mn>2</mn></msup><mo>≡</mo><mi>d</mi><mo stretchy="false">(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">X^{2} \equiv d (mod p)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141079999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">≡</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">d</span><span class="mopen">(</span><span class="mord mathdefault">m</span><span class="mord mathdefault">o</span><span class="mord mathdefault">d</span><span class="mord mathdefault">p</span><span class="mclose">)</span></span></span></span></p>
-<p>1.首先我们先算p-1，之后设<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>p</mi><mo>−</mo><mn>1</mn><mo>=</mo><mi>Q</mi><mo>∗</mo><msup><mn>2</mn><mi>S</mi></msup></mrow><annotation encoding="application/x-tex">p-1=Q*2^S</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7777700000000001em;vertical-align:-0.19444em;"></span><span class="mord mathdefault">p</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.64444em;vertical-align:0em;"></span><span class="mord">1</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.8777699999999999em;vertical-align:-0.19444em;"></span><span class="mord mathdefault">Q</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">∗</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.8413309999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord">2</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8413309999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight" style="margin-right:0.05764em;">S</span></span></span></span></span></span></span></span></span></span></span>,也就是把p-1不停的除以2，除到结果为奇数为止。如果S=1，也就是p-1除以2为奇数(也可以表示为p-1不能被4整除),则直接返回<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>X</mi><mo>=</mo><mo>±</mo><msup><mi>d</mi><mrow><mo stretchy="false">(</mo><mi>p</mi><mo>+</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mn>4</mn></mrow></msup></mrow><annotation encoding="application/x-tex">X=\pm d^{(p+1)/4}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.07847em;">X</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.9713299999999999em;vertical-align:-0.08333em;"></span><span class="mord">±</span><span class="mord"><span class="mord mathdefault">d</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8879999999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathdefault mtight">p</span><span class="mbin mtight">+</span><span class="mord mtight">1</span><span class="mclose mtight">)</span><span class="mord mtight">/</span><span class="mord mtight">4</span></span></span></span></span></span></span></span></span></span></span></span>。</p>
-<p>到这里我们可以发现如果素数p不能被4整除，则可以很快的返回结果。其实也就是素数二进制的最后一位如果是11则不行，16进制则是最后一位是3,7,B,F.很多大素数都满足这几个条件，SECP256K1的曲线，还有国密的SM2曲线都满足这个，所以可以直接返回。<br>
-具体的算法的步骤可以百度，有超级超级多介绍的。</p>
-<h2 id="cipolla"><a class="markdownIt-Anchor" href="#cipolla"></a> Cipolla</h2>
-<p>其实还有一种，按理来说这种应该再一般情况下比上一种更快。这种更简单</p>
-<p>就是找到一个数a，使得<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>a</mi><mn>2</mn></msup><mo>−</mo><mi>n</mi></mrow><annotation encoding="application/x-tex">a^{2}-n</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.897438em;vertical-align:-0.08333em;"></span><span class="mord"><span class="mord mathdefault">a</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault">n</span></span></span></span>是模p下的非二次剩余，也就是<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mo stretchy="false">(</mo><msup><mi>a</mi><mn>2</mn></msup><mo>−</mo><mi>n</mi><msup><mo stretchy="false">)</mo><mrow><mo stretchy="false">(</mo><mi>p</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup><mo>≡</mo><mo>−</mo><mn>1</mn><mo stretchy="false">(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(a^{2}-n)^{(p-1)/2} \equiv -1 (modp)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.064108em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">a</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1.138em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mclose"><span class="mclose">)</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8879999999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathdefault mtight">p</span><span class="mbin mtight">−</span><span class="mord mtight">1</span><span class="mclose mtight">)</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">≡</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">−</span><span class="mord">1</span><span class="mopen">(</span><span class="mord mathdefault">m</span><span class="mord mathdefault">o</span><span class="mord mathdefault">d</span><span class="mord mathdefault">p</span><span class="mclose">)</span></span></span></span>。<br>
-由于二次剩余与非二次剩余的概率各是50%，所以这个数不难找，找到后令<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>w</mi><mo>=</mo><msup><mi>a</mi><mn>2</mn></msup><mo>−</mo><mi>n</mi></mrow><annotation encoding="application/x-tex">w=a^{2}-n</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.02691em;">w</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.897438em;vertical-align:-0.08333em;"></span><span class="mord"><span class="mord mathdefault">a</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault">n</span></span></span></span>,也就是w是这个非二次剩余。</p>
-<p>之后我们就可以计算<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>x</mi><mo>=</mo><mo stretchy="false">(</mo><mi>a</mi><mo>+</mo><msup><mi>w</mi><mrow><mn>1</mn><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup><msup><mo stretchy="false">)</mo><mrow><mo stretchy="false">(</mo><mi>p</mi><mo>+</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup></mrow><annotation encoding="application/x-tex">x=(a+w^{1/2})^{(p+1)/2}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault">x</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord mathdefault">a</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1.138em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.02691em;">w</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8879999999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">1</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mclose"><span class="mclose">)</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8879999999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathdefault mtight">p</span><span class="mbin mtight">+</span><span class="mord mtight">1</span><span class="mclose mtight">)</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></span>就是我们的解。</p>
-<p>这个看起来很简单，几次模幂操作就可以完成。但是问题在于<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>w</mi><mrow><mn>1</mn><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup></mrow><annotation encoding="application/x-tex">w^{1/2}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8879999999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.02691em;">w</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8879999999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">1</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></span>也就是根号下w，他不是个整数，这个在我们整数域下没法表示。这个方法可以通过构造一个新的域。类比于复数的表示方法。</p>
-<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mo stretchy="false">(</mo><mi>a</mi><mo separator="true">,</mo><mi>b</mi><mo stretchy="false">)</mo><mo>=</mo><mi>a</mi><mo>+</mo><mi>b</mi><mo>∗</mo><msup><mi>w</mi><mrow><mn>1</mn><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup></mrow><annotation encoding="application/x-tex">(a,b) = a+b*w^{1/2} 
-</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord mathdefault">a</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.16666666666666666em;"></span><span class="mord mathdefault">b</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.66666em;vertical-align:-0.08333em;"></span><span class="mord mathdefault">a</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault">b</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">∗</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.938em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.02691em;">w</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.938em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">1</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></span></span></p>
-<p>之后类比复数定义加法和乘法就可以了。</p>
-<p>其实我也是这些安全算法的初学者，因为要用GPU加速所以最近在搜索相关的资料，感觉还是很奇妙这些，其中也有很多小的奇技淫巧可以用，大大加快速度，还有好多东西要学。</p>
-</body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">安全</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/算法//" class="article-tag-list-link color3">算法</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/09/25/Quadratic-residue/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-leetcode-97" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/07/18/leetcode-97/">leetcode-97</a>
-    </h1>
-  
-
-        
-        <a href="/2020/07/18/leetcode-97/" class="archive-article-date">
-  	<time datetime="2020-07-18T10:04:10.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-07-18</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="leetcode-97题-交错字符串"><a class="markdownIt-Anchor" href="#leetcode-97题-交错字符串"></a> Leetcode 97题 交错字符串</h1>
-<blockquote><p>给定三个字符串 s1, s2, s3, 验证 s3 是否是由 s1 和 s2 交错组成的。</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">示例 1:</span><br><span class="line"></span><br><span class="line">输入: s1 = "aabcc", s2 = "dbbca", s3 = "aadbbcbcac"</span><br><span class="line">输出: true</span><br></pre></td></tr></tbody></table></figure></div>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">示例 2:</span><br><span class="line"></span><br><span class="line">输入: s1 = "aabcc", s2 = "dbbca", s3 = "aadbbbaccc"</span><br><span class="line">输出: false</span><br></pre></td></tr></tbody></table></figure></div></blockquote>
-<h1 id="题解"><a class="markdownIt-Anchor" href="#题解"></a> 题解</h1>
-<p>这个问题我开始想用双指针，但是出来的报错，后来发现有些例子的结果是错误的，因为双指针说白了就是个贪心的策略。</p>
-<p>后来参考了leetcode的题解，发现用动态规划能获得正确的解，不会陷入贪心的错误解中。<br>
-我们设f(i,j)是第一个字符串的前i位和第二个字符串的前j位能不能交错组合成第三个字符串的前i+j位。<br>
-若s3[i+j]==s1[i],则f(i,j)=f(i-1,j)。<br>
-若s3[i+j]==s2[j],则f(i,j)=f(i,j-1)。<br>
-初始状态f(0,0)=true;<br>
-如果某一个状态下s3[i+j]!=s1[i]&&s3[i+j]!=s2[j],则有不同的字符串不可能组合成目标字符串。</p>
-<p>代码如下</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="keyword">bool</span> <span class="title">isInterleave</span><span class="params">(<span class="built_in">string</span> s1, <span class="built_in">string</span> s2, <span class="built_in">string</span> s3)</span> </span>{</span><br><span class="line">        <span class="keyword">auto</span> f = <span class="built_in">vector</span> < <span class="built_in">vector</span> <<span class="keyword">int</span>> > (s1.size() + <span class="number">1</span>, <span class="built_in">vector</span> <<span class="keyword">int</span>> (s2.size() + <span class="number">1</span>, <span class="literal">false</span>));</span><br><span class="line"></span><br><span class="line">        <span class="keyword">int</span> n = s1.size(), m = s2.size(), t = s3.size();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (n + m != t) {</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        }</span><br><span class="line"></span><br><span class="line">        f[<span class="number">0</span>][<span class="number">0</span>] = <span class="literal">true</span>;</span><br><span class="line">        <span class="keyword">for</span> (<span class="keyword">int</span> i = <span class="number">0</span>; i <= n; ++i) {</span><br><span class="line">            <span class="keyword">for</span> (<span class="keyword">int</span> j = <span class="number">0</span>; j <= m; ++j) {</span><br><span class="line">                <span class="keyword">int</span> p = i + j - <span class="number">1</span>;</span><br><span class="line">                <span class="keyword">if</span> (i > <span class="number">0</span>) {</span><br><span class="line">                    f[i][j] |= (f[i - <span class="number">1</span>][j] && s1[i - <span class="number">1</span>] == s3[p]);</span><br><span class="line">                }</span><br><span class="line">                <span class="keyword">if</span> (j > <span class="number">0</span>) {</span><br><span class="line">                    f[i][j] |= (f[i][j - <span class="number">1</span>] && s2[j - <span class="number">1</span>] == s3[p]);</span><br><span class="line">                }</span><br><span class="line">            }</span><br><span class="line">        }</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> f[n][m];</span><br><span class="line">    }</span><br><span class="line">};</span><br></pre></td></tr></tbody></table></figure></div></body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/07/18/leetcode-97/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-cuda-rdc-compile" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/07/18/cuda-rdc-compile/">cuda(Unresolved extern function错误) 编译调用其他文件中的device函数</a>
-    </h1>
-  
-
-        
-        <a href="/2020/07/18/cuda-rdc-compile/" class="archive-article-date">
-  	<time datetime="2020-07-18T09:55:14.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-07-18</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="unresolved-extern-function错误"><a class="markdownIt-Anchor" href="#unresolved-extern-function错误"></a> Unresolved extern function错误</h1>
-<p>编译过程中遇到Unresolved extern function xxxxxx 错误，一般导致这个错误的原因是在__global__和一些__device__函数放在了分开编译的不同文件中，并且在__global__中调用了这些__device__函数。</p>
-<p>解决的方法也很简单，有两种解决方法</p>
-<ul>
-<li>将二者放到同一文件中进行编译</li>
-<li>通过添加-dc标志来显示启用relocatable device code模式，-dc选项等价于 -rdc=true -c</li>
-</ul>
-<h1 id="补充问题"><a class="markdownIt-Anchor" href="#补充问题"></a> 补充问题</h1>
-<p>在实际操作中按照文档中如下的的加上-dc进行编译</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">bash</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight bash"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">nvcc -arch=sm_35 -dc xx1.cu -o xx1.o</span><br><span class="line">nvcc -arch=sm_35 main.cu xx1.o -o main</span><br></pre></td></tr></tbody></table></figure></div>
-<p>还是会报错Unresolved extern function，没能解决问题</p>
-<p>后来在编译main.cu时添加 <strong>-rdc=true</strong>,不再报错，问题解决<br>
-但是文档中都只是说添加-dc就可以，为什么还需要再添加-rdc暂时还没搞明白。</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">bash</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight bash"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">nvcc -arch=sm_35 -dc xx1.cu -o xx1.o</span><br><span class="line">nvcc -arch=sm_35 -rdc=<span class="literal">true</span> main.cu xx1.o -o main</span><br></pre></td></tr></tbody></table></figure></div></body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/07/18/cuda-rdc-compile/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
   
     <nav id="page-nav">
-      <a class="extend prev" rel="prev" href="/">&amp;laquo; Prev</a><a class="page-number" href="/">1</a><span class="page-number current">2</span><a class="page-number" href="/page/3/">3</a><a class="extend next" rel="next" href="/page/3/">Next &amp;raquo;</a>
+      <a class="extend prev" rel="prev" href="/">&amp;laquo; Prev</a><a class="page-number" href="/">1</a><span class="page-number current">2</span><a class="page-number" href="/page/3/">3</a><a class="page-number" href="/page/4/">4</a><a class="extend next" rel="next" href="/page/3/">Next &amp;raquo;</a>
     </nav>
   
 
@@ -1211,7 +1174,7 @@ warpSize就是warp的大小，一般为32,这里是一个device函数，虽然�
   <div class="outer">
     <div id="footer-info">
     	<div class="footer-left">
-    		&copy; 2022 Yuyang Gao
+    		&copy; 2023 Yuyang Gao
     	</div>
       	<div class="footer-right">
       		<a href="http://hexo.io/" target="_blank">Hexo</a>  Theme <a href="https://github.com/litten/hexo-theme-yilia" target="_blank">Yilia</a> by Litten

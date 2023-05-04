@@ -152,6 +152,651 @@
           <div id="js-content" class="content-ll">
             
   
+    <article id="post-cuda-reduction" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2021/07/23/cuda-reduction/">CUDA Reduction</a>
+    </h1>
+  
+
+        
+        <a href="/2021/07/23/cuda-reduction/" class="archive-article-date">
+  	<time datetime="2021-07-23T13:13:23.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2021-07-23</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="cuda-reduction"><a class="markdownIt-Anchor" href="#cuda-reduction"></a> cuda Reduction</h1>
+<p>有一段时间没更了，之前一直在想记录博客的意义何在，也没想出个所以然，但是不能三分钟热度，所以还是把之前想发的存货找一找</p>
+<p>这段时间在准备工作的事情，复习了下cuda，cuda的reduction是非常常见的，而众多的方法中尤以warp shfl的方法最为简便和高效，这里整理了下代码，简述思路，供自己以后查阅，也欢迎大家交流</p>
+<ul>
+<li>顺便一提，其实最近已经有了采用Tensor Core来进行reduction和scan操作的工作出现了，可以参考论文《Accelerating Reduction and Scan Using Tensor Core Units》，取得了比cub库更好的效果。期待随着WMMA API的进化，能让Tensor Core为除了MatMul以外的算法提供更好的计算效果。 *</li>
+</ul>
+<p>言归正传，基于warp shuffle 的reduction分为三部分：warp粒度的reduction，block粒度的reduction和整个device的reduction</p>
+<h3 id="warp-reduction"><a class="markdownIt-Anchor" href="#warp-reduction"></a> warp Reduction</h3>
+<p>其中warp粒度的reduction比较简洁，但也是整个reduction部分的核心，代码如下。<br>
+warpSize就是warp的大小，一般为32,这里是一个device函数，虽然代码简单，但是可以计算得到这32个线程的和</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">c</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight c"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">define</span> FULL_MASK 0xffffffff</span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">define</span> WARPSIZE 32</span></span><br><span class="line"></span><br><span class="line"><span class="function">__device__ <span class="keyword">int</span> <span class="title">warp_shfl</span><span class="params">(<span class="keyword">int</span> val)</span> </span>{</span><br><span class="line">    <span class="keyword">for</span>(<span class="keyword">int</span> offset=WARPSIZE;offset><span class="number">0</span>;offset>>=<span class="number">1</span>){</span><br><span class="line">        val = __shfl_down_sync(FULL_MASK,val,offset,WARPSIZE);</span><br><span class="line">    }</span><br><span class="line">    <span class="keyword">return</span> val</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
+<h3 id="block-reduction"><a class="markdownIt-Anchor" href="#block-reduction"></a> block reduction</h3>
+<p>block的reduction 则会把每个warp计算的结果再进行一次reduction，由于当前卡的blockSize最大均不超过1024=32*32，所以我们可以将计算的结果在进行一次warpReduction得到计算的结果。</p>
+<p>当然在进行block reduction之前我们需要先把结果存储到shared memory中做一个暂存</p>
+<p>若每个线程负责多个元素（元素数目较多时）,则需要先将每个线程负责的元素做一个加法，代码如下</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">c</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight c"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br></pre></td><td class="code"><pre><span class="line"><span class="function">__global__ <span class="title">blockReduction</span><span class="params">(<span class="keyword">int</span> *in,<span class="keyword">int</span> *out,<span class="keyword">int</span> n)</span></span>{</span><br><span class="line">    <span class="keyword">int</span> tx = threadIdx.x;</span><br><span class="line">    <span class="keyword">int</span> idx = blockIdx.x*blockDim.x+tx;</span><br><span class="line">    <span class="keyword">int</span> nThread = blockDim.x*gridDim.x;</span><br><span class="line">    <span class="keyword">int</span> sum = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">    __shared__ <span class="keyword">int</span> sh[<span class="number">32</span>];</span><br><span class="line">    <span class="keyword">int</span> laneid = tx &<span class="number">0x1f</span>;</span><br><span class="line">    <span class="keyword">int</span> wid = tx >> <span class="number">5</span>;</span><br><span class="line"></span><br><span class="line">    <span class="comment">//每个线程负责的元素先加起来</span></span><br><span class="line">    <span class="keyword">for</span>(<span class="keyword">int</span> i=<span class="number">0</span>;i<n;i+=nthread){< span><br><span class="line">        sum+=in[i];</span><br><span class="line">    }</span><br><span class="line">    <span class="comment">//warp shfl</span></span><br><span class="line">    sum = warp_shfl(sum);</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span>(laneid==<span class="number">0</span>) sh[wid]=sum;</span><br><span class="line">    __syncthreads();</span><br><span class="line"></span><br><span class="line">    sum = tx<blockdim.x warpsize?sh[laneid]:<span class="number">0</blockdim.x></span>;</n;i+=nthread){<></span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span>(wid==<span class="number">0</span>) sum=warp_shfl(sum);</span><br><span class="line">    <span class="comment">//结果存到全局内存</span></span><br><span class="line">    <span class="keyword">if</span>(tx==<span class="number">0</span>) out[blockIdx.x]=sum;</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
+<h3 id="device-reduction"><a class="markdownIt-Anchor" href="#device-reduction"></a> device reduction</h3>
+<p>block内部由于有共享内存，做reduction比较方便，block之间一般采用将结果存到全局内存（上面代码的最后一行），在用单一block的进行进一步规约的形式，这里不再贴出代码，跟上面的形式大同小异</p>
+<p>以上是关于reduction的一些实现，更快速地利用张量核心的计算见本文最开始提到的论文，欢迎大家交流讨论。</p>
+</body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2021/07/23/cuda-reduction/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-memcpyAsync" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2020/10/23/memcpyAsync/">cuda异步内存复制</a>
+    </h1>
+  
+
+        
+        <a href="/2020/10/23/memcpyAsync/" class="archive-article-date">
+  	<time datetime="2020-10-23T09:26:55.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-10-23</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="cuda异步内存复制"><a class="markdownIt-Anchor" href="#cuda异步内存复制"></a> cuda异步内存复制</h1>
+<p>在cuda handbook中发现了一个利用cuda event来进行的异步的内存的复制，觉得比较巧妙，但是美中不足的是书中代码里存在一个bug，不过思想还是很不错的</p>
+<p>利用两个buffer来充当异步复制的缓冲区</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">void *g_hostBuffers[2];</span><br></pre></td></tr></tbody></table></figure></div>
+<p>定义需要的两个event,这里定义了之后就立马record，以便将来函数内第一次Sync时不会出错。</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">cudaEventCreate( &g_events[0] );</span><br><span class="line">cudaEventCreate( &g_events[1] );</span><br><span class="line">// record events so they are signaled on first synchronize</span><br><span class="line">cudaEventRecord( g_events[0], 0 );</span><br><span class="line">cudaEventRecord( g_events[1], 0 );</span><br></pre></td></tr></tbody></table></figure></div>
+<p>之后的内存分配和数据初始化部分我们就省略掉。接下来是最重要的函数部分</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line">void</span><br><span class="line">chMemcpyHtoD( void *device, const void *host, size_t N ) </span><br><span class="line">{</span><br><span class="line">    cudaError_t status;</span><br><span class="line">    char *dst = (char *) device;</span><br><span class="line">    const char *src = (const char *) host;</span><br><span class="line">    int stagingIndex = 0;</span><br><span class="line">    while ( N ) {</span><br><span class="line">        size_t thisCopySize = min( N, STAGING_BUFFER_SIZE );</span><br><span class="line">        cudaEventSynchronize( g_events[stagingIndex] );</span><br><span class="line">        memcpy( g_hostBuffers[stagingIndex], src, thisCopySize ); </span><br><span class="line">        cudaMemcpyAsync( dst, g_hostBuffers[stagingIndex],thisCopySize, cudaMemcpyHostToDevice, NULL );</span><br><span class="line">        cudaEventRecord( g_events[stagingIndex], NULL );</span><br><span class="line">        dst += thisCopySize;</span><br><span class="line">        src += thisCopySize;</span><br><span class="line">        N -= thisCopySize;</span><br><span class="line">        stagingIndex = 1 - stagingIndex;</span><br><span class="line">    }</span><br><span class="line">    return;</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
+<p>这里我们可以看到在第11行我们把src里的数据拷贝到缓冲区中，之后12行执行一个异步的复制操作。<br>
+这个复制操作由于是异步的，所以很快就会返回，执行下一步记录的操作，这一轮的复制操作就结束了，之后更新index，把1变成0,0变成1。<br>
+当我们执行到下一轮的cudaEventSynchronize语句时，我们会等待index所指的事件结束，由于事件是在复制之后被记录的，事件结束也意味着异步复制的结束。这一步是保证当前index的下一个复制时前一个复制已经结束，这样就可以保证两个时间分别进行两个异步的内存复制。</p>
+<p>这里上述的代码是正确的，原书中的代码第13行是错误的，原书中g_event的索引是错误的，为g_events[1-stagingIndex]，这样会导致整个流程都在串行，因为刚刚记录的g_event[0]在下一轮就立马执行了cudaEventSynchronize。</p>
+<p>实验也证明了这一点，原书中的代码在实验室的TITAN V 显卡下的拷贝性能为<strong>2987.32 MB/s</strong>，而修改后上述的正确的代码的性能为<strong>4052.28 MB/s</strong></p>
+</body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2020/10/23/memcpyAsync/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-some-project" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2020/10/22/some-project/">一些项目和大作业汇总(持续更新)</a>
+    </h1>
+  
+
+        
+        <a href="/2020/10/22/some-project/" class="archive-article-date">
+  	<time datetime="2020-10-22T07:19:35.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-10-22</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="一些项目和大作业汇总"><a class="markdownIt-Anchor" href="#一些项目和大作业汇总"></a> 一些项目和大作业汇总</h1>
+<p>最近整理电脑，发现了以前写的一些小项目啊，大作业什么的，虽然大多数随着换电脑丢掉了，但是也保存下来了一部分，最近整理了一下传到了github上，这里也做一个汇总，如果大家有需要可以作参考。</p>
+<p>都是很久以前的代码了，写的比较烂，希望对大家能有一丁点的帮助</p>
+<p>这些代码的编写也或多或少的参考过网络的博客以及师兄师姐同学们的代码，感谢大家的帮助</p>
+<h2 id="计算机网络作业"><a class="markdownIt-Anchor" href="#计算机网络作业"></a> 计算机网络作业</h2>
+<p>研究生课程的计算机网络的大作业<br>
+<a href="https://github.com/WhatGhost/nku_network_hw" target="_blank" rel="noopener">https://github.com/WhatGhost/nku_network_hw</a></p>
+<p>其中每个里面都有当时提交作业时候的文档</p>
+<ul>
+<li>
+<p>HW3是一个FTP的客户端，通过发送请求判断返回码来进行一些操作。GUI用java写的。</p>
+</li>
+<li>
+<p>HW4是一个UDP聊天室，有服务器端和客户端两部分。</p>
+</li>
+</ul>
+<h2 id="简单c编译器"><a class="markdownIt-Anchor" href="#简单c编译器"></a> 简单C编译器</h2>
+<p>本科时候编译原理课程的大作业，简单的只支持浮点和整数的简单赋值和计算，以及if，while，for等简单分支语句的编译器。</p>
+<p><a href="https://github.com/WhatGhost/simple-c-compiler" target="_blank" rel="noopener">https://github.com/WhatGhost/simple-c-compiler</a></p>
+</body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">编程笔记</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">项目</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">日常</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/零碎的项目和代码//" class="article-tag-list-link color4">零碎的项目和代码</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2020/10/22/some-project/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-Quadratic-residue" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2020/09/25/Quadratic-residue/">二次剩余判定与求解</a>
+    </h1>
+  
+
+        
+        <a href="/2020/09/25/Quadratic-residue/" class="archive-article-date">
+  	<time datetime="2020-09-24T16:10:47.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-09-25</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="二次剩余"><a class="markdownIt-Anchor" href="#二次剩余"></a> 二次剩余</h1>
+<p>最近在做一些关于椭圆曲线的优化，其中message到点的映射需要用到二次剩余相关的知识，也是第一次接触相关算法，查了一些资料之后自己在GPU端实现了一下，记录一下相关的心得。</p>
+<p>一个整数X的平方 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>X</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">X^{2}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141079999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></span> 除以另一个整数p的余数，就叫做X对于整数p的二次剩余。也就是当存在某个X使得</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>X</mi><mn>2</mn></msup><mo>≡</mo><mi>d</mi><mo stretchy="false">(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">X^{2} \equiv d (mod p) 
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8641079999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">≡</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">d</span><span class="mopen">(</span><span class="mord mathdefault">m</span><span class="mord mathdefault">o</span><span class="mord mathdefault">d</span><span class="mord mathdefault">p</span><span class="mclose">)</span></span></span></span></span></p>
+<p>则d就是模p的二次剩余。一般来说，p都是大素数。</p>
+<p>当需要判断一个x是否在椭圆曲线上时，需要计算 <span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>y</mi><mn>2</mn></msup><mo>=</mo><msup><mi>x</mi><mn>3</mn></msup><mo>+</mo><mi>a</mi><mi>x</mi><mo>+</mo><mi>b</mi></mrow><annotation encoding="application/x-tex">y^{2} = x^{3} +ax +b</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.008548em;vertical-align:-0.19444em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.03588em;">y</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.897438em;vertical-align:-0.08333em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">3</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.66666em;vertical-align:-0.08333em;"></span><span class="mord mathdefault">a</span><span class="mord mathdefault">x</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault">b</span></span></span></span><br>
+是否成立，也就是算<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>x</mi><mn>3</mn></msup><mo>+</mo><mi>a</mi><mi>x</mi><mo>+</mo><mi>b</mi></mrow><annotation encoding="application/x-tex">x^{3} +ax +b</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.897438em;vertical-align:-0.08333em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">3</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.66666em;vertical-align:-0.08333em;"></span><span class="mord mathdefault">a</span><span class="mord mathdefault">x</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault">b</span></span></span></span>是不是模p上的二次剩余</p>
+<h2 id="判断二次剩余"><a class="markdownIt-Anchor" href="#判断二次剩余"></a> 判断二次剩余</h2>
+<p>判断二次剩余可以用欧拉准则，但是欧拉准则也只能判断是不是，但是不能求解出具体的结果，用来验证足够了。</p>
+<p>欧拉准则提出，d是模p的二次剩余的充要条件就是</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>d</mi><mrow><mo stretchy="false">(</mo><mi>p</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup><mo>≡</mo><mn>1</mn><mo stretchy="false">(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">d^{(p-1)/2} \equiv 1 (modp) 
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.938em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">d</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.938em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathdefault mtight">p</span><span class="mbin mtight">−</span><span class="mord mtight">1</span><span class="mclose mtight">)</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">≡</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">1</span><span class="mopen">(</span><span class="mord mathdefault">m</span><span class="mord mathdefault">o</span><span class="mord mathdefault">d</span><span class="mord mathdefault">p</span><span class="mclose">)</span></span></span></span></span></p>
+<p>d是模p的非二次剩余的充要条件就是</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>d</mi><mrow><mo stretchy="false">(</mo><mi>p</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup><mo>≡</mo><mo>−</mo><mn>1</mn><mo stretchy="false">(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">d^{(p-1)/2} \equiv -1 (modp) 
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.938em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault">d</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.938em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathdefault mtight">p</span><span class="mbin mtight">−</span><span class="mord mtight">1</span><span class="mclose mtight">)</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">≡</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">−</span><span class="mord">1</span><span class="mopen">(</span><span class="mord mathdefault">m</span><span class="mord mathdefault">o</span><span class="mord mathdefault">d</span><span class="mord mathdefault">p</span><span class="mclose">)</span></span></span></span></span></p>
+<p>这里由于椭圆曲线域上的这个素数p都是提前知道的，所以我们可以<strong>预先算出</strong>来(p-1)/2,这样就可以方便的计算，省掉了很多计算的步骤。对于模幂操作可以用蒙哥马利模乘来实现模幂。</p>
+<h2 id="求解二次剩余"><a class="markdownIt-Anchor" href="#求解二次剩余"></a> 求解二次剩余</h2>
+<p>欧拉准则只能做判断，当判断这个x的坐标在椭圆曲线上时，我们需要求得y的坐标，所以还需要求解二次剩余，这里两种方法，一种是Tonelli-Shanks算法，我在程序中采用了这种方法(由于素数p满足其中的特殊条件)，所以计算很快，只需要算一次模幂操作。。</p>
+<h3 id="tonelli-shanks"><a class="markdownIt-Anchor" href="#tonelli-shanks"></a> Tonelli-Shanks</h3>
+<p>这个算法其实网上有很多的介绍，这里多介绍，只说我在实现的时候看到的特殊情况<br>
+算法开始部分如下</p>
+<p><strong>输入为模p的一个二次剩余d，我们想得到的则是这个二次剩余的解X</strong>，使得<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>X</mi><mn>2</mn></msup><mo>≡</mo><mi>d</mi><mo stretchy="false">(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">X^{2} \equiv d (mod p)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8141079999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.07847em;">X</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">≡</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault">d</span><span class="mopen">(</span><span class="mord mathdefault">m</span><span class="mord mathdefault">o</span><span class="mord mathdefault">d</span><span class="mord mathdefault">p</span><span class="mclose">)</span></span></span></span></p>
+<p>1.首先我们先算p-1，之后设<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>p</mi><mo>−</mo><mn>1</mn><mo>=</mo><mi>Q</mi><mo>∗</mo><msup><mn>2</mn><mi>S</mi></msup></mrow><annotation encoding="application/x-tex">p-1=Q*2^S</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.7777700000000001em;vertical-align:-0.19444em;"></span><span class="mord mathdefault">p</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.64444em;vertical-align:0em;"></span><span class="mord">1</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.8777699999999999em;vertical-align:-0.19444em;"></span><span class="mord mathdefault">Q</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">∗</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.8413309999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord">2</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8413309999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mathdefault mtight" style="margin-right:0.05764em;">S</span></span></span></span></span></span></span></span></span></span></span>,也就是把p-1不停的除以2，除到结果为奇数为止。如果S=1，也就是p-1除以2为奇数(也可以表示为p-1不能被4整除),则直接返回<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>X</mi><mo>=</mo><mo>±</mo><msup><mi>d</mi><mrow><mo stretchy="false">(</mo><mi>p</mi><mo>+</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mn>4</mn></mrow></msup></mrow><annotation encoding="application/x-tex">X=\pm d^{(p+1)/4}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.68333em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.07847em;">X</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.9713299999999999em;vertical-align:-0.08333em;"></span><span class="mord">±</span><span class="mord"><span class="mord mathdefault">d</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8879999999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathdefault mtight">p</span><span class="mbin mtight">+</span><span class="mord mtight">1</span><span class="mclose mtight">)</span><span class="mord mtight">/</span><span class="mord mtight">4</span></span></span></span></span></span></span></span></span></span></span></span>。</p>
+<p>到这里我们可以发现如果素数p不能被4整除，则可以很快的返回结果。其实也就是素数二进制的最后一位如果是11则不行，16进制则是最后一位是3,7,B,F.很多大素数都满足这几个条件，SECP256K1的曲线，还有国密的SM2曲线都满足这个，所以可以直接返回。<br>
+具体的算法的步骤可以百度，有超级超级多介绍的。</p>
+<h2 id="cipolla"><a class="markdownIt-Anchor" href="#cipolla"></a> Cipolla</h2>
+<p>其实还有一种，按理来说这种应该再一般情况下比上一种更快。这种更简单</p>
+<p>就是找到一个数a，使得<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>a</mi><mn>2</mn></msup><mo>−</mo><mi>n</mi></mrow><annotation encoding="application/x-tex">a^{2}-n</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.897438em;vertical-align:-0.08333em;"></span><span class="mord"><span class="mord mathdefault">a</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault">n</span></span></span></span>是模p下的非二次剩余，也就是<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mo stretchy="false">(</mo><msup><mi>a</mi><mn>2</mn></msup><mo>−</mo><mi>n</mi><msup><mo stretchy="false">)</mo><mrow><mo stretchy="false">(</mo><mi>p</mi><mo>−</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup><mo>≡</mo><mo>−</mo><mn>1</mn><mo stretchy="false">(</mo><mi>m</mi><mi>o</mi><mi>d</mi><mi>p</mi><mo stretchy="false">)</mo></mrow><annotation encoding="application/x-tex">(a^{2}-n)^{(p-1)/2} \equiv -1 (modp)</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.064108em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord"><span class="mord mathdefault">a</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1.138em;vertical-align:-0.25em;"></span><span class="mord mathdefault">n</span><span class="mclose"><span class="mclose">)</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8879999999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathdefault mtight">p</span><span class="mbin mtight">−</span><span class="mord mtight">1</span><span class="mclose mtight">)</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">≡</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord">−</span><span class="mord">1</span><span class="mopen">(</span><span class="mord mathdefault">m</span><span class="mord mathdefault">o</span><span class="mord mathdefault">d</span><span class="mord mathdefault">p</span><span class="mclose">)</span></span></span></span>。<br>
+由于二次剩余与非二次剩余的概率各是50%，所以这个数不难找，找到后令<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>w</mi><mo>=</mo><msup><mi>a</mi><mn>2</mn></msup><mo>−</mo><mi>n</mi></mrow><annotation encoding="application/x-tex">w=a^{2}-n</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault" style="margin-right:0.02691em;">w</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.897438em;vertical-align:-0.08333em;"></span><span class="mord"><span class="mord mathdefault">a</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8141079999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">−</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault">n</span></span></span></span>,也就是w是这个非二次剩余。</p>
+<p>之后我们就可以计算<span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>x</mi><mo>=</mo><mo stretchy="false">(</mo><mi>a</mi><mo>+</mo><msup><mi>w</mi><mrow><mn>1</mn><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup><msup><mo stretchy="false">)</mo><mrow><mo stretchy="false">(</mo><mi>p</mi><mo>+</mo><mn>1</mn><mo stretchy="false">)</mo><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup></mrow><annotation encoding="application/x-tex">x=(a+w^{1/2})^{(p+1)/2}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault">x</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord mathdefault">a</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:1.138em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.02691em;">w</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8879999999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">1</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mclose"><span class="mclose">)</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8879999999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mopen mtight">(</span><span class="mord mathdefault mtight">p</span><span class="mbin mtight">+</span><span class="mord mtight">1</span><span class="mclose mtight">)</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></span>就是我们的解。</p>
+<p>这个看起来很简单，几次模幂操作就可以完成。但是问题在于<span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>w</mi><mrow><mn>1</mn><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup></mrow><annotation encoding="application/x-tex">w^{1/2}</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:0.8879999999999999em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.02691em;">w</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8879999999999999em;"><span style="top:-3.063em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">1</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></span>也就是根号下w，他不是个整数，这个在我们整数域下没法表示。这个方法可以通过构造一个新的域。类比于复数的表示方法。</p>
+<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mo stretchy="false">(</mo><mi>a</mi><mo separator="true">,</mo><mi>b</mi><mo stretchy="false">)</mo><mo>=</mo><mi>a</mi><mo>+</mo><mi>b</mi><mo>∗</mo><msup><mi>w</mi><mrow><mn>1</mn><mi mathvariant="normal">/</mi><mn>2</mn></mrow></msup></mrow><annotation encoding="application/x-tex">(a,b) = a+b*w^{1/2} 
+</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mopen">(</span><span class="mord mathdefault">a</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.16666666666666666em;"></span><span class="mord mathdefault">b</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.66666em;vertical-align:-0.08333em;"></span><span class="mord mathdefault">a</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.69444em;vertical-align:0em;"></span><span class="mord mathdefault">b</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">∗</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.938em;vertical-align:0em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.02691em;">w</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.938em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">1</span><span class="mord mtight">/</span><span class="mord mtight">2</span></span></span></span></span></span></span></span></span></span></span></span></span></p>
+<p>之后类比复数定义加法和乘法就可以了。</p>
+<p>其实我也是这些安全算法的初学者，因为要用GPU加速所以最近在搜索相关的资料，感觉还是很奇妙这些，其中也有很多小的奇技淫巧可以用，大大加快速度，还有好多东西要学。</p>
+</body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">安全</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/算法//" class="article-tag-list-link color3">算法</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2020/09/25/Quadratic-residue/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-leetcode-97" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2020/07/18/leetcode-97/">leetcode-97</a>
+    </h1>
+  
+
+        
+        <a href="/2020/07/18/leetcode-97/" class="archive-article-date">
+  	<time datetime="2020-07-18T10:04:10.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-07-18</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="leetcode-97题-交错字符串"><a class="markdownIt-Anchor" href="#leetcode-97题-交错字符串"></a> Leetcode 97题 交错字符串</h1>
+<blockquote><p>给定三个字符串 s1, s2, s3, 验证 s3 是否是由 s1 和 s2 交错组成的。</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">示例 1:</span><br><span class="line"></span><br><span class="line">输入: s1 = "aabcc", s2 = "dbbca", s3 = "aadbbcbcac"</span><br><span class="line">输出: true</span><br></pre></td></tr></tbody></table></figure></div>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">示例 2:</span><br><span class="line"></span><br><span class="line">输入: s1 = "aabcc", s2 = "dbbca", s3 = "aadbbbaccc"</span><br><span class="line">输出: false</span><br></pre></td></tr></tbody></table></figure></div></blockquote>
+<h1 id="题解"><a class="markdownIt-Anchor" href="#题解"></a> 题解</h1>
+<p>这个问题我开始想用双指针，但是出来的报错，后来发现有些例子的结果是错误的，因为双指针说白了就是个贪心的策略。</p>
+<p>后来参考了leetcode的题解，发现用动态规划能获得正确的解，不会陷入贪心的错误解中。<br>
+我们设f(i,j)是第一个字符串的前i位和第二个字符串的前j位能不能交错组合成第三个字符串的前i+j位。<br>
+若s3[i+j]==s1[i],则f(i,j)=f(i-1,j)。<br>
+若s3[i+j]==s2[j],则f(i,j)=f(i,j-1)。<br>
+初始状态f(0,0)=true;<br>
+如果某一个状态下s3[i+j]!=s1[i]&&s3[i+j]!=s2[j],则有不同的字符串不可能组合成目标字符串。</p>
+<p>代码如下</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">class</span> <span class="title">Solution</span> {</span></span><br><span class="line"><span class="keyword">public</span>:</span><br><span class="line">    <span class="function"><span class="keyword">bool</span> <span class="title">isInterleave</span><span class="params">(<span class="built_in">string</span> s1, <span class="built_in">string</span> s2, <span class="built_in">string</span> s3)</span> </span>{</span><br><span class="line">        <span class="keyword">auto</span> f = <span class="built_in">vector</span> < <span class="built_in">vector</span> <<span class="keyword">int</span>> > (s1.size() + <span class="number">1</span>, <span class="built_in">vector</span> <<span class="keyword">int</span>> (s2.size() + <span class="number">1</span>, <span class="literal">false</span>));</span><br><span class="line"></span><br><span class="line">        <span class="keyword">int</span> n = s1.size(), m = s2.size(), t = s3.size();</span><br><span class="line"></span><br><span class="line">        <span class="keyword">if</span> (n + m != t) {</span><br><span class="line">            <span class="keyword">return</span> <span class="literal">false</span>;</span><br><span class="line">        }</span><br><span class="line"></span><br><span class="line">        f[<span class="number">0</span>][<span class="number">0</span>] = <span class="literal">true</span>;</span><br><span class="line">        <span class="keyword">for</span> (<span class="keyword">int</span> i = <span class="number">0</span>; i <= n; ++i) {</span><br><span class="line">            <span class="keyword">for</span> (<span class="keyword">int</span> j = <span class="number">0</span>; j <= m; ++j) {</span><br><span class="line">                <span class="keyword">int</span> p = i + j - <span class="number">1</span>;</span><br><span class="line">                <span class="keyword">if</span> (i > <span class="number">0</span>) {</span><br><span class="line">                    f[i][j] |= (f[i - <span class="number">1</span>][j] && s1[i - <span class="number">1</span>] == s3[p]);</span><br><span class="line">                }</span><br><span class="line">                <span class="keyword">if</span> (j > <span class="number">0</span>) {</span><br><span class="line">                    f[i][j] |= (f[i][j - <span class="number">1</span>] && s2[j - <span class="number">1</span>] == s3[p]);</span><br><span class="line">                }</span><br><span class="line">            }</span><br><span class="line">        }</span><br><span class="line"></span><br><span class="line">        <span class="keyword">return</span> f[n][m];</span><br><span class="line">    }</span><br><span class="line">};</span><br></pre></td></tr></tbody></table></figure></div></body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">leetcode</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color3">算法</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/算法题解//" class="article-tag-list-link color5">算法题解</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2020/07/18/leetcode-97/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
+    <article id="post-cuda-rdc-compile" class="article article-type-post  article-index" itemscope itemprop="blogPost">
+  <div class="article-inner">
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2020/07/18/cuda-rdc-compile/">cuda(Unresolved extern function错误) 编译调用其他文件中的device函数</a>
+    </h1>
+  
+
+        
+        <a href="/2020/07/18/cuda-rdc-compile/" class="archive-article-date">
+  	<time datetime="2020-07-18T09:55:14.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-07-18</time>
+</a>
+        
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <html><head></head><body><h1 id="unresolved-extern-function错误"><a class="markdownIt-Anchor" href="#unresolved-extern-function错误"></a> Unresolved extern function错误</h1>
+<p>编译过程中遇到Unresolved extern function xxxxxx 错误，一般导致这个错误的原因是在__global__和一些__device__函数放在了分开编译的不同文件中，并且在__global__中调用了这些__device__函数。</p>
+<p>解决的方法也很简单，有两种解决方法</p>
+<ul>
+<li>将二者放到同一文件中进行编译</li>
+<li>通过添加-dc标志来显示启用relocatable device code模式，-dc选项等价于 -rdc=true -c</li>
+</ul>
+<h1 id="补充问题"><a class="markdownIt-Anchor" href="#补充问题"></a> 补充问题</h1>
+<p>在实际操作中按照文档中如下的的加上-dc进行编译</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">bash</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight bash"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">nvcc -arch=sm_35 -dc xx1.cu -o xx1.o</span><br><span class="line">nvcc -arch=sm_35 main.cu xx1.o -o main</span><br></pre></td></tr></tbody></table></figure></div>
+<p>还是会报错Unresolved extern function，没能解决问题</p>
+<p>后来在编译main.cu时添加 <strong>-rdc=true</strong>,不再报错，问题解决<br>
+但是文档中都只是说添加-dc就可以，为什么还需要再添加-rdc暂时还没搞明白。</p>
+<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">bash</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight bash"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">nvcc -arch=sm_35 -dc xx1.cu -o xx1.o</span><br><span class="line">nvcc -arch=sm_35 -rdc=<span class="literal">true</span> main.cu xx1.o -o main</span><br></pre></td></tr></tbody></table></figure></div></body></html>
+      
+
+      
+    </div>
+    <div class="article-info article-info-index">
+      
+      
+	<div class="article-tag tagcloud">
+		<i class="icon-price-tags icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
+        		</li>
+      		 
+        		<li class="article-tag-list-item">
+        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+      
+	<div class="article-category tagcloud">
+		<i class="icon-book icon"></i>
+		<ul class="article-tag-list">
+			 
+        		<li class="article-tag-list-item">
+        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
+        		</li>
+      		
+		</ul>
+	</div>
+
+
+      
+        <p class="article-more-link">
+          <a class="article-more-a" href="/2020/07/18/cuda-rdc-compile/">展开全文 >></a>
+        </p>
+      
+
+      
+      <div class="clearfix"></div>
+    </div>
+  </div>
+</article>
+
+<aside class="wrap-side-operation">
+    <div class="mod-side-operation">
+        
+        <div class="jump-container" id="js-jump-container" style="display:none;">
+            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
+                <i class="icon-font icon-back"></i>
+            </a>
+            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
+                <i class="icon-font icon-plane jump-plane"></i>
+            </div>
+        </div>
+        
+        
+    </div>
+</aside>
+
+
+
+
+  
     <article id="post-leetcode-365" class="article article-type-post  article-index" itemscope itemprop="blogPost">
   <div class="article-inner">
     
@@ -599,634 +1244,9 @@
 
 
   
-    <article id="post-cuda-unified-memory" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/03/12/cuda-unified-memory/">cuda unified memory简介 和 cuda深拷贝问题</a>
-    </h1>
-  
-
-        
-        <a href="/2020/03/12/cuda-unified-memory/" class="archive-article-date">
-  	<time datetime="2020-03-12T05:55:14.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-03-12</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <h1 id="cuda-unified-memory简介-和-cuda深拷贝问题"><a class="markdownIt-Anchor" href="#cuda-unified-memory简介-和-cuda深拷贝问题"></a> cuda unified memory简介 和 cuda深拷贝问题</h1>
-<h2 id="unified-memory"><a class="markdownIt-Anchor" href="#unified-memory"></a> unified memory</h2>
-<p>unified memory 是cuda6.0以后的版本增加的一个编程模型<br>
-统一内存创建了一个受管内存池，该池在CPU和GPU之间共享，弥合了CPU与GPU的鸿沟。使得CPU端和GPU端都能通过同一个指针访问数据，从而避免了程序员编写代码时显示的执行GPU和CPU端的内存拷贝命令</p>
-<p><img src="/.io//unified_memory.png" alt></p>
-<p>一个使用unified memory的例子如下</p>
-<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">void sortfile(FILE *fp, int N)&#123;</span><br><span class="line">    char *data; </span><br><span class="line">    cudaMallocManaged(data, N);</span><br><span class="line"></span><br><span class="line">    fread(data, 1, N, fp);</span><br><span class="line"></span><br><span class="line">    qsort&lt;&lt;&lt;...&gt;&gt;&gt;(data, N, 1, compare);</span><br><span class="line">    cudaDeviceSynchronize()</span><br><span class="line">    usedata(data);</span><br><span class="line">    free(data);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
-<p>观察上面的例子我们看到，以前需要的 <em><strong>cudaMemcpy</strong></em> 不再需要了<br>
-如果不用Unified Memory，我们如果需要在GPU上处理数据，需要显示的调用cudaMemcpy函数到GPU端，需要在CPU端处理的时候还需要在cudaMemcpy回来,会带来很大的麻烦。而unified memory则可以解决这个问题（拷贝依然会执行，但是是系统帮程序员执行，不需要显示调用cudamemcpy）</p>
-<p>使用unified memry 需要使用 <em><strong>cudaMallocManaged</strong></em> 函数来进行分配。<br>
-这样带来的好处主要是可以减少代码量，使得程序员不用费尽心思去进行CPU和GPU端数据的拷贝，尤其是对于一些嵌套结构体，链表之类的拷贝起来比较麻烦的问题。</p>
-<h2 id="深拷贝问题"><a class="markdownIt-Anchor" href="#深拷贝问题"></a> 深拷贝问题</h2>
-<p>使用unified memory可以很好地将解决这个问题，使得我们不用再考虑深拷贝的问题，而专心的解决程序算法的编写，这个是显而易见的，就不在啰嗦</p>
-<p>但是很多时候尤其是在优化现有项目的时候，我们想向GPU端传一个已经初始化好的结构体，如何进行深拷贝<br>
-有以下的解决方案</p>
-<p>加入我们有以下结构体</p>
-<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">struct</span> <span class="title class_">dataElem</span> &#123;</span><br><span class="line">  <span class="type">int</span> prop1;</span><br><span class="line">  <span class="type">int</span> prop2;</span><br><span class="line">  <span class="type">char</span> *name;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
-<p>里面包含一个指针，这样单纯的cudaMemcpy(dst,src,sizeof(dataElem),cudaMemcpyHostToDevice)是不行的，因为这样的只是浅拷贝，只会拷贝指针的值就是地址，但是GPU端是没法使用CPU端的指针的，所以我们需要一下的深拷贝方法</p>
-<figure class="highlight cpp"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br></pre></td><td class="code"><pre><span class="line"><span class="function"><span class="type">void</span> <span class="title">launch</span><span class="params">(dataElem *elem)</span> </span>&#123;</span><br><span class="line">  dataElem *d_elem;</span><br><span class="line">  <span class="type">char</span> *d_name;</span><br><span class="line"></span><br><span class="line">  <span class="type">int</span> namelen = <span class="built_in">strlen</span>(elem-&gt;name) + <span class="number">1</span>;</span><br><span class="line"></span><br><span class="line">  <span class="comment">//为elem和name分别分配空间</span></span><br><span class="line">  <span class="built_in">cudaMalloc</span>(&amp;d_elem, <span class="built_in">sizeof</span>(dataElem));</span><br><span class="line">  <span class="built_in">cudaMalloc</span>(&amp;d_name, namelen);</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 把elem和里面name的值分别拷贝到GPU端</span></span><br><span class="line">  <span class="built_in">cudaMemcpy</span>(d_elem, elem, <span class="built_in">sizeof</span>(dataElem), cudaMemcpyHostToDevice);</span><br><span class="line">  <span class="built_in">cudaMemcpy</span>(d_name, elem-&gt;name, namelen, cudaMemcpyHostToDevice);</span><br><span class="line">  <span class="comment">//将d_elem里name的指针重新赋值为GPU端的指针</span></span><br><span class="line">  <span class="built_in">cudaMemcpy</span>(&amp;(d_elem-&gt;name), &amp;d_name, <span class="built_in">sizeof</span>(<span class="type">char</span>*), cudaMemcpyHostToDevice);</span><br><span class="line"></span><br><span class="line">  <span class="comment">// 运行核函数</span></span><br><span class="line">  Kernel&lt;&lt;&lt; ... &gt;&gt;&gt;(d_elem);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
-<p>但是如果是嵌套非常深的结构体（最近被这种问题搞得很难受），上述的方法显然麻烦得很，那就需要把原来的结构体展开成一个没有多层嵌套的结构体，就相当于把这个很深结构拉开展平，在进行传参。</p>
-<p>最后，写cuda时不要定义很深的结构体，如果有还是要用unified memory</p>
-
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/03/12/cuda-unified-memory/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-sstream" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/03/06/sstream/">使用sstream读取字符串中的数字(c++)</a>
-    </h1>
-  
-
-        
-        <a href="/2020/03/06/sstream/" class="archive-article-date">
-  	<time datetime="2020-03-06T06:32:17.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-03-06</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="使用sstream读取字符串中的数字c"><a class="markdownIt-Anchor" href="#使用sstream读取字符串中的数字c"></a> 使用sstream读取字符串中的数字(c++)</h1>
-<h2 id="stio-atoi"><a class="markdownIt-Anchor" href="#stio-atoi"></a> stio & atoi</h2>
-<p>先介绍以前常用的方法( <strong>stoi</strong> 或 <strong>atoi</strong> )</p>
-<p>在以往的c++编程中当我们输入整行以空格作为分割的数字时</p>
-<p>由于整行读入的字符串，我们会采用空格切分字符串，在进行处理</p>
-<p>stoi需要包含头文件<code>#include<string></string></code></p>
-<p>atoi需要包含头文件<code>#include<sctdlib></sctdlib></code></p>
-<p><em><strong>stoi(string)</strong></em> 参数是一string类型，当字符串不合法时，会报错</p>
-<p><em><strong>atoi(char*)</strong></em> 参数是char*类型，即c字符串，当字符串非法时,他会从字符串开始寻找正负号小数点或者数字，遇到非法字符时停下</p>
-<p>例如“123HD23330”通过调用atoi返回值为123，而stoi则会直接报错</p>
-<p>此外还有一函数strtoi(char*)用法与atoi一直，只是stroi可以指定的进制</p>
-<p>以上是整数类型的转换，此外还有 ***stof()，stod(),strtod()***等函数可以进行浮点数的转换</p>
-<h2 id="sstream"><a class="markdownIt-Anchor" href="#sstream"></a> sstream</h2>
-<p>接下来是要介绍的 <em><strong>stringstream</strong></em> 类，运用此方法不需要将一群数字组成的串用空格切分为单个的串，在一个一个转换，而是可以直接对整个串进行转换</p>
-<p>需要<code>#include<sstream></sstream></code></p>
-<p>通过stringstream类对象实现字符串转</p>
-<p>实例如下</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">include</span><span class="meta-string"><sstream></sstream></span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span><span class="meta-string"><string></string></span></span></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span><span class="meta-string"><iostream></iostream></span></span></span><br><span class="line"><span class="keyword">using</span> <span class="keyword">namespace</span> <span class="built_in">std</span>;</span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">main</span><span class="params">()</span></span>{</span><br><span class="line">    <span class="built_in">string</span> line;</span><br><span class="line">    <span class="keyword">while</span>(getline(<span class="built_in">cin</span>,line)){</span><br><span class="line">        <span class="keyword">int</span> x;</span><br><span class="line">        <span class="function"><span class="built_in">stringstream</span> <span class="title">ss</span><span class="params">(line)</span></span>;  <span class="comment">//建立stringstream对象，初始化流内容为line所代表的字符串</span></span><br><span class="line">        <span class="keyword">while</span>(ss>>x)            <span class="comment">//从line中一次读取数字存入x</span></span><br><span class="line">        <span class="built_in">cout</span><<x<<<span class="built_in">endl</x<<<span></span>;<br><span class="line">    }</span><br><span class="line">    <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">Code</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight plain"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">如果输为："12 23 43 555"</span><br><span class="line"></span><br><span class="line">则输出为 </span><br><span class="line">12</span><br><span class="line">23</span><br><span class="line">43</span><br><span class="line">555</span><br></pre></td></tr></tbody></table></figure></div>
-</body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color1">字符串处理</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">编程笔记</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/C-笔记//" class="article-tag-list-link color1">C++笔记</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/03/06/sstream/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-cuda-gcc-compile-error-note-1" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/03/05/cuda-gcc-compile-error-note-1/">Cuda C 混合编译</a>
-    </h1>
-  
-
-        
-        <a href="/2020/03/05/cuda-gcc-compile-error-note-1/" class="archive-article-date">
-  	<time datetime="2020-03-04T16:17:52.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-03-05</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><h1 id="cuda-c-混合编译"><a class="markdownIt-Anchor" href="#cuda-c-混合编译"></a> Cuda C 混合编译</h1>
-<h2 id="1-extern-c"><a class="markdownIt-Anchor" href="#1-extern-c"></a> 1 extern “C”</h2>
-<p>在用CUDA的.cu文件和C的.c文件混合编译时，最后用gcc对之前步骤生成的目标.o文件混合编译时经常会报错</p>
-<p>例如我门又如下三个文件<br>
-c语言的main.c文件</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">c</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight c"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">"cuda_fun.h"</span></span></span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">main</span><span class="params">()</span></span>{</span><br><span class="line">    cuda_fun();</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
-<p>cuda_fun.h头文件是函数的声明，这里省略</p>
-<p>cuda_fun.cu</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"><span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">"cuda_fun.h"</span></span></span><br><span class="line"></span><br><span class="line"><span class="function">__global__ <span class="title">cuda_kernel</span><span class="params">()</span></span>{</span><br><span class="line">    <span class="comment">//some code</span></span><br><span class="line">}</span><br><span class="line"></span><br><span class="line"><span class="function"><span class="keyword">int</span> <span class="title">cuda_fun</span><span class="params">()</span></span>{</span><br><span class="line">    nBlock = <span class="number">1</span>;</span><br><span class="line">    nThread = <span class="number">128</span>;</span><br><span class="line">    cuda_kernel<<<nblock,nthread>>>();</nblock,nthread></span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
-<p>如果我们想混合编译.c和.cu文件，编译时可能会遇到undefined reference to cuda_fun的错误，这是由于由于nvcc用的是c<ins>的编译器，c</ins>与c混合编译也会遇到这样的问题，所以我们需要用extern "C"来修饰cu里面的代码，如下所示</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">cpp</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight cpp"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="keyword">extern</span> <span class="string">"C"</span>{</span><br><span class="line">    <span class="meta">#<span class="meta-keyword">include</span> <span class="meta-string">"cuda_fun.h"</span></span></span><br><span class="line">}</span><br><span class="line"><span class="function">__global__ <span class="title">cuda_kernel</span><span class="params">()</span></span>{</span><br><span class="line">    <span class="comment">//some code</span></span><br><span class="line">}</span><br><span class="line"></span><br><span class="line"><span class="keyword">extern</span> <span class="string">"C"</span>{</span><br><span class="line">    <span class="function"><span class="keyword">int</span> <span class="title">cuda_fun</span><span class="params">()</span></span>{</span><br><span class="line">        nBlock = <span class="number">1</span>;</span><br><span class="line">        nThread = <span class="number">128</span>;</span><br><span class="line">        cuda_kernel<<<nblock,nthread>>>();</nblock,nthread></span><br><span class="line">    }</span><br><span class="line">}</span><br></pre></td></tr></tbody></table></figure></div>
-<h2 id="2-cuda库"><a class="markdownIt-Anchor" href="#2-cuda库"></a> 2 cuda库</h2>
-<p>但是如果我们直接用</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">bash</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight bash"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">gcc -o my_app main.o my_fun.o</span><br></pre></td></tr></tbody></table></figure></div>
-<p>进行编译的话，会报例如<code>undefined reference to cudalaunchkernel</code>等的错误。这是由于找不到cuda的一些运行时的库导致的，所以我们需要在gcc编译时用 <strong>-L</strong> 和 <strong>-l</strong> 来引入相应的库</p>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">bash</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight bash"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">gcc -o my_app  -L/usr/<span class="built_in">local</span>/cuda-10.0/lib64 -lcuda -lcudart main.o my_fun.o</span><br></pre></td></tr></tbody></table></figure></div>
-<p>根据gcc链接器工作原理，被依赖目标文件（或库）必须放在引用该文件的目标文件（或库）的后面（如果放在前面，链接器在处理被依赖文件时，不知道后面会有对该文件的引用，被引用的符号就不会提取出来）</p>
-<p>说白了就是被引用的在后面，如果无法理清依赖关系，可以用Xlinker，或者是单纯的多写几遍\(<sup>o</sup>)/~，这里不再详细说了</p>
-</body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/03/05/cuda-gcc-compile-error-note-1/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-osdi16pung" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/03/02/osdi16pung/">osdi16pung</a>
-    </h1>
-  
-
-        
-        <a href="/2020/03/02/osdi16pung/" class="archive-article-date">
-  	<time datetime="2020-03-02T08:20:08.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-03-02</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <h1 id="unobservable-communication-over-fully-untrusted-infrastructure"><a class="markdownIt-Anchor" href="#unobservable-communication-over-fully-untrusted-infrastructure"></a> Unobservable communication over fully untrusted infrastructure</h1>
-<p>本周组会汇报的论文 <strong>《Unobservable communication over fully untrusted infrastructure》</strong> 发布在OSDI16上，其主要工作聚焦于通信当中的元数据的隐私保护问题。</p>
-<p>所谓元数据就是指的除了通信信息内容以外的通信消息，如通信双方，通信时间，信息长度，发送方接收方收发消息的频率等可以泄露相关隐私的数据。</p>
-<p>论文设计并实现了一个用于通信元数据隐私保护的系统——Pung，如图1。</p>
-<p><img src="/.io//p1.png" alt></p>
-<p>主体思想就是用一个中间的KV存储系统进行消息的转发，发送者将信息发送到该KV存储中，接收者按照相应的label值进行检索（为了隐藏收发双方的关系，发送和检索的label值需不一样）。</p>
-<p>论文中信息的检索采用了PIR的方案，但是PIR的每次访问都需要遍历整个数组，用户事先是不知道想要查找的label值在整个集合中的索引的，在集合有序的情况下，每次都需要log(n)次遍历所有集合的检索操作，需要n*log(n)的操作。</p>
-<p>为了改善这一点，文中使用了BST（完全二叉搜索树）来存储集合，树的每一层在检索时都看作一个独立的集合，具体结构如下图2所示，从根节点所在的层，逐步向下搜索到最底层，这样我们只需要遍历一遍整棵树就可以获得任意我们想要的元素</p>
-<p><img src="/.io//p2.png" alt></p>
-<p>上面讲的都是对于单个消息的检索，对于同时需要检索多个消息的情况只能多轮检索，所以作者提出了一种可以同时检索多个消息的方案，将整个集合分为多个桶，每个桶可以看作一个独立的子集，这样每个桶内都可以检索一条消息，k个桶最多可以同时检索条消息。</p>
-<p>但是依然存在问题：每个桶里因为只能遍历一次所以只能检索出一条消息，如果碰到想在一个桶内检索多条消息依然需要多轮，所以在论文中作者提出了一种改进方案2.0版本，就是给所有消息备份，同一条消息会在另外一个桶里有一个备份（两个桶里面的同一条消息的label是不同的），如图3所示，这其实是一种空间换时间的方法。用户可以自己只能冲突最少的检索策略，避免多轮检索的情况。</p>
-<p><img src="/.io//p3.png" alt><br>
-除了上述的，还有很多措施来实现隐藏元数据目标，Pung这个系统是回合制的，一轮一轮的进行，每一轮都分为发送和检索两个阶段，每个客户端都会在发送和检索阶段发送和检索固定数目的消息，这样可以隐藏发送接受频率等信息。</p>
-<p>Pung较好的实现了隐藏元数据的目标，但是也存在一些缺点，一个是通信双方必须事先知道彼此，知道双方的公钥。而且BST方案的网络通信代价较高。所以作者做了一些权衡，在小集合上采用了直接发送一个label-index的布隆过滤器给用户。</p>
-<p>Pung 使用rust实现，代码发布在GitHub上<a target="_blank" rel="noopener" href="https://github.com/pung-project/pung">https://github.com/pung-project/pung</a></p>
-
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">隐私保护</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/论文阅读//" class="article-tag-list-link color5">论文阅读</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/03/02/osdi16pung/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-cuda-julia" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/03/01/cuda-julia/">cuda-julia</a>
-    </h1>
-  
-
-        
-        <a href="/2020/03/01/cuda-julia/" class="archive-article-date">
-  	<time datetime="2020-03-01T15:13:18.000Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-03-01</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <h1 id="cuda-学习julia-集计算"><a class="markdownIt-Anchor" href="#cuda-学习julia-集计算"></a> cuda 学习——julia 集计算</h1>
-<p>最近在学习 cuda ，正在看《 cuda by examples 》一书，感觉也是受益很多   之前在 B 站上也看了 NVIDA 的视频，结合起来还是很不错的<br>
-在这里记录一下学习的心得和笔记</p>
-<h2 id="关于-julia-集"><a class="markdownIt-Anchor" href="#关于-julia-集"></a> 关于 julia 集</h2>
-<p>关于 julia 集， julia 集合是一个在复平面上形成分形的点的集合 可以由下式得到</p>
-<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>f</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mi>c</mi></mrow><annotation encoding="application/x-tex">f(x)=x^{2}+c 
-</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1em;vertical-align:-0.25em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord mathdefault">x</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.9474379999999999em;vertical-align:-0.08333em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault">c</span></span></span></span></span></p>
-<p>其中c是一个固定的复数<br>
-这样对于某一x，经过不停的迭代可以得到一序列</p>
-<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>x</mi><mo separator="true">,</mo><mi>f</mi><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo separator="true">,</mo><msup><mi>f</mi><mn>2</mn></msup><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo separator="true">,</mo><msup><mi>f</mi><mn>3</mn></msup><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mi mathvariant="normal">.</mi><mi mathvariant="normal">.</mi><mi mathvariant="normal">.</mi></mrow><annotation encoding="application/x-tex">x,f(x),f^{2}(x),f^3(x)...
-</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.1141079999999999em;vertical-align:-0.25em;"></span><span class="mord mathdefault">x</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.16666666666666666em;"></span><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="mopen">(</span><span class="mord mathdefault">x</span><span class="mclose">)</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.16666666666666666em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord mathdefault">x</span><span class="mclose">)</span><span class="mpunct">,</span><span class="mspace" style="margin-right:0.16666666666666666em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight">3</span></span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord mathdefault">x</span><span class="mclose">)</span><span class="mord">.</span><span class="mord">.</span><span class="mord">.</span></span></span></span></span></p>
-<p>其中</p>
-<p><span class="katex-display"><span class="katex"><span class="katex-mathml"><math><semantics><mrow><msup><mi>f</mi><mrow><mi>n</mi><mo>+</mo><mn>1</mn></mrow></msup><mo stretchy="false">(</mo><mi>x</mi><mo stretchy="false">)</mo><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><mi>c</mi></mrow><annotation encoding="application/x-tex">f^{n+1}(x) = x^{2}+c
-</annotation></semantics></math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="strut" style="height:1.1141079999999999em;vertical-align:-0.25em;"></span><span class="mord"><span class="mord mathdefault" style="margin-right:0.10764em;">f</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.864108em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mathdefault mtight">n</span><span class="mbin mtight">+</span><span class="mord mtight">1</span></span></span></span></span></span></span></span></span><span class="mopen">(</span><span class="mord mathdefault">x</span><span class="mclose">)</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span><span class="mrel">=</span><span class="mspace" style="margin-right:0.2777777777777778em;"></span></span><span class="base"><span class="strut" style="height:0.9474379999999999em;vertical-align:-0.08333em;"></span><span class="mord"><span class="mord mathdefault">x</span><span class="msupsub"><span class="vlist-t"><span class="vlist-r"><span class="vlist" style="height:0.8641079999999999em;"><span style="top:-3.113em;margin-right:0.05em;"><span class="pstrut" style="height:2.7em;"></span><span class="sizing reset-size6 size3 mtight"><span class="mord mtight"><span class="mord mtight">2</span></span></span></span></span></span></span></span></span><span class="mspace" style="margin-right:0.2222222222222222em;"></span><span class="mbin">+</span><span class="mspace" style="margin-right:0.2222222222222222em;"></span></span><span class="base"><span class="strut" style="height:0.43056em;vertical-align:0em;"></span><span class="mord mathdefault">c</span></span></span></span></span></p>
-<p>这样复平面内的点有的经过迭代后会<strong>发散</strong>到无穷，或始终处于某一范围之内并<strong>收敛</strong>于某一值。我们将使其不扩散的z值的集合称为<strong>朱利亚集合</strong></p>
-<p>我对Julia集的了解也并不深入（毕竟不是学数学的）不过这些知识对于计算来说也够用了</p>
-<p>下面来慢慢分析</p>
-<h2 id="相关头文件下载"><a class="markdownIt-Anchor" href="#相关头文件下载"></a> 相关头文件下载</h2>
-<p>在分析代码之前我们需要先下载书中的头文件，我们在这个代码中用到了书中作者编写的部分头文件，下载链接为<a target="_blank" rel="noopener" href="https://developer.nvidia.com/cuda-example">CUDA BY EXAMPLE</a><br>
-这是书的源代码，下载下来之后将common文件夹内需要的头文件其放到适合的位置，到时候<code>include</code>进来就好了</p>
-<h2 id="cuda-计算"><a class="markdownIt-Anchor" href="#cuda-计算"></a> cuda 计算</h2>
-<h4 id="julia函数"><a class="markdownIt-Anchor" href="#julia函数"></a> julia函数</h4>
-<p>我们最终要的任务是计算上问的函数并判断是否收敛，对复平面内的每个点都要进行相同的运算，由于每个点的计算都是独立的，这就非常适合使用GPU进行并行计算.<br>
-代码也十分简单易于理解，</p>
-<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br></pre></td><td class="code"><pre><span class="line">__device__ <span class="type">int</span> <span class="title function_">julia</span><span class="params">(<span class="type">int</span> x, <span class="type">int</span> y)</span> &#123;</span><br><span class="line">	<span class="type">const</span> <span class="type">float</span> scale = <span class="number">1.5</span>;</span><br><span class="line">	<span class="comment">//将所有的点缩小到（-1,1）的范围内</span></span><br><span class="line">	<span class="type">float</span> jx = scale * (<span class="type">float</span>)(DIM / <span class="number">2</span> - x) / (DIM / <span class="number">2</span>);</span><br><span class="line">	<span class="type">float</span> jy = scale * (<span class="type">float</span>)(DIM / <span class="number">2</span> - y) / (DIM / <span class="number">2</span>);</span><br><span class="line"></span><br><span class="line">	cuComplex <span class="title function_">c</span><span class="params">(<span class="number">-0.8</span>, <span class="number">0.156</span>)</span>;    <span class="comment">//上文的固定负数c            </span></span><br><span class="line">	cuComplex <span class="title function_">a</span><span class="params">(jx, jy)</span>;		<span class="comment">//当前点的坐标</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/**</span></span><br><span class="line"><span class="comment">	*迭代200次</span></span><br><span class="line"><span class="comment">	*如果200次之后的大小不超过规定值(这里设定为1000)</span></span><br><span class="line"><span class="comment">	*就认定是不发散的</span></span><br><span class="line"><span class="comment">	**/</span></span><br><span class="line">	<span class="type">int</span> i = <span class="number">0</span>;</span><br><span class="line">	<span class="keyword">for</span> (i = <span class="number">0</span>; i&lt;<span class="number">200</span>; i++) &#123;                       </span><br><span class="line">		a = a * a + c;</span><br><span class="line">		<span class="keyword">if</span> (a.magnitude2() &gt; <span class="number">1000</span>)</span><br><span class="line">			<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
-<p>首先我们把所有的点映射到-1到1的范围内，在这里要<strong>强制类型转换</strong>因为除法前后的都是整数所以如果不转换出来的结果全是0或者1，我当时就犯了这个错误导致出来的结果很迷，还debug了半天。</p>
-<p>之后我们规定复数c和当前点，进行运算，若发散，返回0，不发散返回1，用于以后的运算</p>
-<h4 id="核函数kernel"><a class="markdownIt-Anchor" href="#核函数kernel"></a> 核函数kernel</h4>
-<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line">__global__ <span class="type">void</span> <span class="title function_">kernel</span><span class="params">(<span class="type">unsigned</span> <span class="type">char</span> *ptr)</span> &#123;</span><br><span class="line">	<span class="comment">// 获得像素坐标</span></span><br><span class="line">	<span class="type">int</span> x = blockIdx.x;</span><br><span class="line">	<span class="type">int</span> y = blockIdx.y;</span><br><span class="line">	<span class="type">int</span> offset = x + y * gridDim.x;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">	<span class="comment">// 计算是否不发散</span></span><br><span class="line">	<span class="type">int</span> juliaValue = julia(x, y);</span><br><span class="line"></span><br><span class="line">	<span class="comment">//若不发散则设为红色</span></span><br><span class="line">	<span class="comment">//否则设为黑色</span></span><br><span class="line">	ptr[offset * <span class="number">4</span> + <span class="number">0</span>] = <span class="number">255</span> * juliaValue;</span><br><span class="line">	ptr[offset * <span class="number">4</span> + <span class="number">1</span>] = <span class="number">0</span>;</span><br><span class="line">	ptr[offset * <span class="number">4</span> + <span class="number">2</span>] = <span class="number">0</span>;</span><br><span class="line">	ptr[offset * <span class="number">4</span> + <span class="number">3</span>] = <span class="number">255</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
-<p>首先获得像素坐标，若不发散则设为红色，否则设为黑色</p>
-<p>至于主函数则十分简单，创建矩阵分配内存，显示图片等正常操作<br>
-具体见下方代码<br>
-最后附上全部的代码</p>
-<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br><span class="line">77</span><br><span class="line">78</span><br><span class="line">79</span><br><span class="line">80</span><br><span class="line">81</span><br><span class="line">82</span><br><span class="line">83</span><br><span class="line">84</span><br><span class="line">85</span><br><span class="line">86</span><br><span class="line">87</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&quot;cuda_runtime.h&quot;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&quot;device_launch_parameters.h&quot;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&quot;../common/book.h&quot;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&quot;../common/cpu_bitmap.h&quot;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> DIM 500</span></span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cuComplex</span> &#123;</span></span><br><span class="line">	<span class="type">float</span>   r;</span><br><span class="line">	<span class="type">float</span>   i;</span><br><span class="line">	__device__ <span class="title function_">cuComplex</span><span class="params">(<span class="type">float</span> a, <span class="type">float</span> b)</span> : <span class="title function_">r</span><span class="params">(a)</span>, <span class="title function_">i</span><span class="params">(b)</span> &#123;&#125;</span><br><span class="line">	__device__ <span class="type">float</span> <span class="title function_">magnitude2</span><span class="params">(<span class="type">void</span>)</span> &#123;</span><br><span class="line">		<span class="keyword">return</span> r * r + i * i;</span><br><span class="line">	&#125;</span><br><span class="line">	__device__ cuComplex operator*(<span class="type">const</span> cuComplex&amp; a) &#123;</span><br><span class="line">		<span class="keyword">return</span> cuComplex(r*a.r - i*a.i, i*a.r + r*a.i);</span><br><span class="line">	&#125;</span><br><span class="line">	__device__ cuComplex operator+(<span class="type">const</span> cuComplex&amp; a) &#123;</span><br><span class="line">		<span class="keyword">return</span> cuComplex(r + a.r, i + a.i);</span><br><span class="line">	&#125;</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">__device__ <span class="type">int</span> <span class="title function_">julia</span><span class="params">(<span class="type">int</span> x, <span class="type">int</span> y)</span> &#123;</span><br><span class="line">	<span class="type">const</span> <span class="type">float</span> scale = <span class="number">1.5</span>;</span><br><span class="line">	<span class="comment">//将所有的点缩小到（-1,1）的范围内</span></span><br><span class="line">	<span class="type">float</span> jx = scale * (<span class="type">float</span>)(DIM / <span class="number">2</span> - x) / (DIM / <span class="number">2</span>);</span><br><span class="line">	<span class="type">float</span> jy = scale * (<span class="type">float</span>)(DIM / <span class="number">2</span> - y) / (DIM / <span class="number">2</span>);</span><br><span class="line"></span><br><span class="line">	cuComplex <span class="title function_">c</span><span class="params">(<span class="number">-0.8</span>, <span class="number">0.156</span>)</span>;    <span class="comment">//上文的固定负数c            </span></span><br><span class="line">	cuComplex <span class="title function_">a</span><span class="params">(jx, jy)</span>;		<span class="comment">//当前点的坐标</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/**</span></span><br><span class="line"><span class="comment">	*迭代200次</span></span><br><span class="line"><span class="comment">	*如果200次之后的大小不超过规定值(这里设定为1000)</span></span><br><span class="line"><span class="comment">	*就认定是不发散的</span></span><br><span class="line"><span class="comment">	**/</span></span><br><span class="line">	<span class="type">int</span> i = <span class="number">0</span>;</span><br><span class="line">	<span class="keyword">for</span> (i = <span class="number">0</span>; i&lt;<span class="number">200</span>; i++) &#123;                       </span><br><span class="line">		a = a * a + c;</span><br><span class="line">		<span class="keyword">if</span> (a.magnitude2() &gt; <span class="number">1000</span>)</span><br><span class="line">			<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> <span class="number">1</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">__global__ <span class="type">void</span> <span class="title function_">kernel</span><span class="params">(<span class="type">unsigned</span> <span class="type">char</span> *ptr)</span> &#123;</span><br><span class="line">	<span class="comment">// 获得像素坐标</span></span><br><span class="line">	<span class="type">int</span> x = blockIdx.x;</span><br><span class="line">	<span class="type">int</span> y = blockIdx.y;</span><br><span class="line">	<span class="type">int</span> offset = x + y * gridDim.x;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line">	<span class="comment">// 计算是否不发散</span></span><br><span class="line">	<span class="type">int</span> juliaValue = julia(x, y);</span><br><span class="line"></span><br><span class="line">	<span class="comment">//若不发散则设为红色</span></span><br><span class="line">	<span class="comment">//否则设为黑色</span></span><br><span class="line">	ptr[offset * <span class="number">4</span> + <span class="number">0</span>] = <span class="number">255</span> * juliaValue;</span><br><span class="line">	ptr[offset * <span class="number">4</span> + <span class="number">1</span>] = <span class="number">0</span>;</span><br><span class="line">	ptr[offset * <span class="number">4</span> + <span class="number">2</span>] = <span class="number">0</span>;</span><br><span class="line">	ptr[offset * <span class="number">4</span> + <span class="number">3</span>] = <span class="number">255</span>;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line"></span><br><span class="line"><span class="type">int</span> <span class="title function_">main</span><span class="params">(<span class="type">void</span>)</span> &#123;</span><br><span class="line">	<span class="comment">//创建图片矩阵</span></span><br><span class="line">	CPUBitmap <span class="title function_">bitmap</span><span class="params">(DIM, DIM)</span>;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">char</span>    *dev_bitmap;</span><br><span class="line">	<span class="comment">//分配内存</span></span><br><span class="line">	HANDLE_ERROR(cudaMalloc((<span class="type">void</span>**)&amp;dev_bitmap, bitmap.image_size()));</span><br><span class="line"></span><br><span class="line">	dim3    <span class="title function_">grid</span><span class="params">(DIM, DIM)</span>;</span><br><span class="line">	kernel &lt;&lt; &lt;grid, <span class="number">1</span> &gt;&gt; &gt;(dev_bitmap);</span><br><span class="line">	将计算结果传输会host内存</span><br><span class="line">	HANDLE_ERROR(cudaMemcpy(bitmap.get_ptr(), dev_bitmap,</span><br><span class="line">		bitmap.image_size(),</span><br><span class="line">		cudaMemcpyDeviceToHost));</span><br><span class="line">	<span class="comment">//显示</span></span><br><span class="line">	bitmap.display_and_exit();</span><br><span class="line">	HANDLE_ERROR(cudaFree(dev_bitmap));</span><br><span class="line">	</span><br><span class="line">	</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
-<h2 id="结果"><a class="markdownIt-Anchor" href="#结果"></a> 结果</h2>
-<p><img src="/.io//julia.png" alt></p>
-<h2 id="常见错误"><a class="markdownIt-Anchor" href="#常见错误"></a> 常见错误</h2>
-<h3 id="找不到glut64lib-或glut32lib"><a class="markdownIt-Anchor" href="#找不到glut64lib-或glut32lib"></a> 找不到glut64.lib 或glut32.lib</h3>
-<p>遇到此问题时，将在第一步时下载的源码中<code>lib/glut64.lib和lib/glut32.lib</code>复制进入<code>**C:\Program Files**\NVIDIA GPU Computing Toolkit\CUDA\v9.2\lib</code>文件夹下对应的文件夹中，如果是x64的就放入x64文件夹中，32位的就放入Win32文件夹中，路径中加粗的部分为cuda的安装位置</p>
-<p>或者百度搜索也会有很多其他解决方案</p>
-
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-	<div class="article-tag tagcloud">
-		<i class="icon-price-tags icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color5">cuda</a>
-        		</li>
-      		 
-        		<li class="article-tag-list-item">
-        			<a href="javascript:void(0)" class="js-tag article-tag-list-link color4">GPU</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-      
-	<div class="article-category tagcloud">
-		<i class="icon-book icon"></i>
-		<ul class="article-tag-list">
-			 
-        		<li class="article-tag-list-item">
-        			<a href="/categories/cuda笔记//" class="article-tag-list-link color2">cuda笔记</a>
-        		</li>
-      		
-		</ul>
-	</div>
-
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/03/01/cuda-julia/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
-    <article id="post-hello-world" class="article article-type-post  article-index" itemscope itemprop="blogPost">
-  <div class="article-inner">
-    
-      <header class="article-header">
-        
-  
-    <h1 itemprop="name">
-      <a class="article-title" href="/2020/02/29/hello-world/">Hello World</a>
-    </h1>
-  
-
-        
-        <a href="/2020/02/29/hello-world/" class="archive-article-date">
-  	<time datetime="2020-02-29T11:47:01.556Z" itemprop="datePublished"><i class="icon-calendar icon"></i>2020-02-29</time>
-</a>
-        
-      </header>
-    
-    <div class="article-entry" itemprop="articleBody">
-      
-        <html><head></head><body><p>Welcome to <a href="https://hexo.io/" target="_blank" rel="noopener">Hexo</a>! This is your very first post. Check <a href="https://hexo.io/docs/" target="_blank" rel="noopener">documentation</a> for more info. If you get any problems when using Hexo, you can find the answer in <a href="https://hexo.io/docs/troubleshooting.html" target="_blank" rel="noopener">troubleshooting</a> or you can ask me on <a href="https://github.com/hexojs/hexo/issues" target="_blank" rel="noopener">GitHub</a>.</p>
-<h2 id="quick-start"><a class="markdownIt-Anchor" href="#quick-start"></a> Quick Start</h2>
-<h3 id="create-a-new-post"><a class="markdownIt-Anchor" href="#create-a-new-post"></a> Create a new post</h3>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">bash</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight bash"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ hexo new <span class="string">"My New Post"</span></span><br></pre></td></tr></tbody></table></figure></div>
-<p>More info: <a href="https://hexo.io/docs/writing.html" target="_blank" rel="noopener">Writing</a></p>
-<h3 id="run-server"><a class="markdownIt-Anchor" href="#run-server"></a> Run server</h3>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">bash</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight bash"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ hexo server</span><br></pre></td></tr></tbody></table></figure></div>
-<p>More info: <a href="https://hexo.io/docs/server.html" target="_blank" rel="noopener">Server</a></p>
-<h3 id="generate-static-files"><a class="markdownIt-Anchor" href="#generate-static-files"></a> Generate static files</h3>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">bash</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight bash"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ hexo generate</span><br></pre></td></tr></tbody></table></figure></div>
-<p>More info: <a href="https://hexo.io/docs/generating.html" target="_blank" rel="noopener">Generating</a></p>
-<h3 id="deploy-to-remote-sites"><a class="markdownIt-Anchor" href="#deploy-to-remote-sites"></a> Deploy to remote sites</h3>
-<div class="code-area-wrap"><div class="highlight-tools"><i class="fa fa-angle-down code-expand" aria-hidden="true"></i><div class="code_lang">bash</div><div class="copy-notice"></div><i class="fa fa-clipboard" aria-hidden="true"></i></div><figure class="highlight bash"><table><tbody><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">$ hexo deploy</span><br></pre></td></tr></tbody></table></figure></div>
-<p>More info: <a href="https://hexo.io/docs/one-command-deployment.html" target="_blank" rel="noopener">Deployment</a></p>
-</body></html>
-      
-
-      
-    </div>
-    <div class="article-info article-info-index">
-      
-      
-      
-
-      
-        <p class="article-more-link">
-          <a class="article-more-a" href="/2020/02/29/hello-world/">展开全文 >></a>
-        </p>
-      
-
-      
-      <div class="clearfix"></div>
-    </div>
-  </div>
-</article>
-
-<aside class="wrap-side-operation">
-    <div class="mod-side-operation">
-        
-        <div class="jump-container" id="js-jump-container" style="display:none;">
-            <a href="javascript:void(0)" class="mod-side-operation__jump-to-top">
-                <i class="icon-font icon-back"></i>
-            </a>
-            <div id="js-jump-plan-container" class="jump-plan-container" style="top: -11px;">
-                <i class="icon-font icon-plane jump-plane"></i>
-            </div>
-        </div>
-        
-        
-    </div>
-</aside>
-
-
-
-
-  
   
     <nav id="page-nav">
-      <a class="extend prev" rel="prev" href="/page/2/">&amp;laquo; Prev</a><a class="page-number" href="/">1</a><a class="page-number" href="/page/2/">2</a><span class="page-number current">3</span>
+      <a class="extend prev" rel="prev" href="/page/2/">&amp;laquo; Prev</a><a class="page-number" href="/">1</a><a class="page-number" href="/page/2/">2</a><span class="page-number current">3</span><a class="page-number" href="/page/4/">4</a><a class="extend next" rel="next" href="/page/4/">Next &amp;raquo;</a>
     </nav>
   
 
@@ -1238,7 +1258,7 @@ c语言的main.c文件</p>
   <div class="outer">
     <div id="footer-info">
     	<div class="footer-left">
-    		&copy; 2022 Yuyang Gao
+    		&copy; 2023 Yuyang Gao
     	</div>
       	<div class="footer-right">
       		<a href="http://hexo.io/" target="_blank">Hexo</a>  Theme <a href="https://github.com/litten/hexo-theme-yilia" target="_blank">Yilia</a> by Litten
